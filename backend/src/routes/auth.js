@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db from '../db.js';
+import db, { newId } from '../db.js';
 import { createWorkerSession, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
@@ -21,6 +21,34 @@ router.post('/worker-login', async (req, res) => {
 
   const token = createWorkerSession(worker.id);
   res.json({ token, worker: { id: worker.id, name: worker.name } });
+});
+
+// Public: lets a new worker create their own account (name + PIN) instead
+// of waiting for the admin to add them from the Admin panel.
+router.post('/register-worker', async (req, res) => {
+  const { name, pin, phone } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Inserisci il tuo nome.' });
+  }
+  if (!pin || !/^\d{4,6}$/.test(String(pin))) {
+    return res.status(400).json({ error: 'Il PIN deve avere tra 4 e 6 cifre.' });
+  }
+
+  const trimmedName = name.trim();
+  const alreadyExists = db.data.workers.some(
+    (w) => w.name.trim().toLowerCase() === trimmedName.toLowerCase()
+  );
+  if (alreadyExists) {
+    return res.status(409).json({ error: 'Esiste già un operaio con questo nome. Scegline un altro.' });
+  }
+
+  const worker = { id: newId(), name: trimmedName, pin: String(pin), phone: phone || '' };
+  db.data.workers.push(worker);
+  await db.write();
+
+  const token = createWorkerSession(worker.id);
+  res.status(201).json({ token, worker: { id: worker.id, name: worker.name } });
 });
 
 router.post('/admin-login', (req, res) => {

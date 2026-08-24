@@ -47,6 +47,8 @@ export const api = {
     request('/api/auth/worker-login', { method: 'POST', body: { workerId, pin }, auth: 'none' }),
   adminLogin: (password) =>
     request('/api/auth/admin-login', { method: 'POST', body: { password }, auth: 'none' }),
+  registerWorker: (name, pin) =>
+    request('/api/auth/register-worker', { method: 'POST', body: { name, pin }, auth: 'none' }),
 
   // Voice / sessions
   voiceStatus: () => request('/api/voice/status'),

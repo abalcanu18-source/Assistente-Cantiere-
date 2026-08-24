@@ -8,11 +8,19 @@ export default function Login({ companyName, onLogin, onOpenAdmin }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const [registering, setRegistering] = useState(false);
+  const [regName, setRegName] = useState('');
+  const [regPin, setRegPin] = useState('');
+
+  function loadWorkers() {
     api
       .listWorkersPublic()
       .then(setWorkers)
       .catch(() => setError('Impossibile contattare il server. Controlla la connessione.'));
+  }
+
+  useEffect(() => {
+    loadWorkers();
   }, []);
 
   function pressDigit(d) {
@@ -40,6 +48,94 @@ export default function Login({ companyName, onLogin, onOpenAdmin }) {
     }
   }
 
+  function pressRegDigit(d) {
+    setError('');
+    if (regPin.length < 6) setRegPin(regPin + d);
+  }
+
+  function backspaceReg() {
+    setRegPin(regPin.slice(0, -1));
+  }
+
+  async function submitRegister() {
+    if (!regName.trim() || regPin.length < 4) return;
+    setLoading(true);
+    setError('');
+    try {
+      const { token, worker } = await api.registerWorker(regName.trim(), regPin);
+      saveWorkerSession(token);
+      onLogin(worker.name);
+    } catch (err) {
+      setError(err.message);
+      setRegPin('');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function backToList() {
+    setSelected(null);
+    setRegistering(false);
+    setPin('');
+    setRegName('');
+    setRegPin('');
+    setError('');
+    loadWorkers();
+  }
+
+  if (registering) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <button className="link-btn back-btn" onClick={backToList}>
+            ← Torna indietro
+          </button>
+          <h1>Registrati</h1>
+          <p className="login-subtitle">Scrivi il tuo nome e scegli un PIN (4-6 cifre)</p>
+
+          {error && <div className="alert alert-error">{error}</div>}
+
+          <input
+            className="text-answer-input"
+            style={{ width: '100%', marginBottom: 16 }}
+            type="text"
+            placeholder="Il tuo nome"
+            value={regName}
+            onChange={(e) => setRegName(e.target.value)}
+            autoFocus
+          />
+
+          <div className="pin-display">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <span key={i} className={`pin-dot ${regPin.length > i ? 'filled' : ''}`} />
+            ))}
+          </div>
+
+          <div className="keypad">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => (
+              <button key={n} className="keypad-btn" onClick={() => pressRegDigit(String(n))}>
+                {n}
+              </button>
+            ))}
+            <button className="keypad-btn keypad-btn-muted" onClick={backspaceReg}>
+              ⌫
+            </button>
+            <button className="keypad-btn" onClick={() => pressRegDigit('0')}>
+              0
+            </button>
+            <button
+              className="keypad-btn keypad-btn-primary"
+              onClick={submitRegister}
+              disabled={loading || !regName.trim() || regPin.length < 4}
+            >
+              {loading ? '...' : 'OK'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!selected) {
     return (
       <div className="login-screen">
@@ -56,9 +152,13 @@ export default function Login({ companyName, onLogin, onOpenAdmin }) {
               </button>
             ))}
             {workers.length === 0 && !error && (
-              <p className="muted">Nessun operaio configurato ancora. Chiedi all'amministratore di aggiungerti.</p>
+              <p className="muted">Nessun operaio configurato ancora. Registrati qui sotto.</p>
             )}
           </div>
+
+          <button className="btn btn-primary btn-lg" style={{ width: '100%' }} onClick={() => setRegistering(true)}>
+            + Registrati
+          </button>
 
           <button className="link-btn" onClick={onOpenAdmin}>
             Sono l'amministratore →
