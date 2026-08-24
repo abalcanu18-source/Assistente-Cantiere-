@@ -1,0 +1,74 @@
+# Render "Blueprint": descrive come pubblicare online sia il backend che il
+# frontend con un unico account gratuito su Render (https://render.com).
+#
+# Come si usa (una volta sola):
+#   1. Carica questo progetto su GitHub (vedi README.md).
+#   2. Su Render: New -> Blueprint -> collega il repository GitHub.
+#   3. Render leggerà questo file e creerà i due servizi qui sotto.
+#   4. Nel pannello di ciascun servizio, compila le variabili segnate
+#      "sync: false" (chiavi private: OpenAI, email, Upstash, VAPID...).
+#   5. Dopo il primo deploy, Render assegna un indirizzo tipo
+#      https://cantieri-backend-xxxx.onrender.com e
+#      https://cantieri-frontend-xxxx.onrender.com: copia questi indirizzi
+#      nelle variabili FRONTEND_ORIGIN (backend) e VITE_API_URL (frontend),
+#      poi salva per far ripartire entrambi i servizi.
+
+services:
+  - type: web
+    name: cantieri-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SECRETARY_EMAIL
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_CONTACT_EMAIL
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      # Da compilare DOPO il primo deploy del frontend, con il suo
+      # indirizzo reale (es. https://cantieri-frontend-xxxx.onrender.com)
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+  - type: web
+    name: cantieri-frontend
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      # Da compilare DOPO il primo deploy del backend, con il suo indirizzo
+      # reale (es. https://cantieri-backend-xxxx.onrender.com)
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_VAPID_PUBLIC_KEY
+        sync: false

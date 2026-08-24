@@ -1,0 +1,316 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../api.js';
+import { isVoiceSupported, useVoice } from '../useVoice.js';
+import { setupPushNotifications } from '../push.js';
+import { playAlarmBeeps } from '../beep.js';
+
+function isNowNear(hhmm, windowMinutes = 5) {
+  if (!hhmm) return false;
+  const [h, m] = hhmm.split(':').map(Number);
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(h, m, 0, 0);
+  const diffMinutes = Math.abs(now - target) / 60000;
+  return diffMinutes <= windowMinutes;
+}
+
+export default function Assistant({ workerName }) {
+  const { listen, speak, isListening, interimTranscript } = useVoice();
+
+  const [status, setStatus] = useState(null); // { openSession, lastCompletedSession }
+  const [settings, setSettings] = useState({});
+  const [phase, setPhase] = useState('idle'); // idle | speaking | listening | thinking | done | error
+  const [conversationType, setConversationType] = useState(null); // morning | evening
+  const [assistantMessage, setAssistantMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [micNotice, setMicNotice] = useState('');
+  const [typedAnswer, setTypedAnswer] = useState('');
+  const [alarmActive, setAlarmActive] = useState(null); // 'morning' | 'evening' | null
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+  const alarmFiredRef = useRef({ morning: null, evening: null });
+
+  const refreshStatus = useCallback(() => {
+    api.voiceStatus().then(setStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+    api.getSettings().then(setSettings).catch(() => {});
+  }, [refreshStatus]);
+
+  // Foreground fallback "alarm": works even without push permission, as
+  // long as the app is open. Checks every 20s if we've just crossed the
+  // configured morning/evening time and haven't already fired today.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!settings.alarmMorning && !settings.alarmEvening) return;
+      const todayKey = new Date().toISOString().slice(0, 10);
+
+      if (isNowNear(settings.alarmMorning, 1) && alarmFiredRef.current.morning !== todayKey && !status?.openSession) {
+        alarmFiredRef.current.morning = todayKey;
+        triggerAlarm('morning');
+      }
+      if (
+        isNowNear(settings.alarmEvening, 1) &&
+        alarmFiredRef.current.evening !== todayKey &&
+        status?.openSession
+      ) {
+        alarmFiredRef.current.evening = todayKey;
+        triggerAlarm('evening');
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [settings, status]);
+
+  // Push notifications tapped while the app was closed/backgrounded.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handler = (event) => {
+      if (event.data?.type === 'alarm-tapped') {
+        triggerAlarm(event.data.alarmType === 'evening' ? 'evening' : 'morning');
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handler);
+    return () => navigator.serviceWorker.removeEventListener('message', handler);
+  }, []);
+
+  function triggerAlarm(type) {
+    setAlarmActive(type);
+    playAlarmBeeps(4);
+    if (navigator.vibrate) navigator.vibrate([400, 200, 400, 200, 400]);
+  }
+
+  async function enablePush() {
+    const ok = await setupPushNotifications();
+    setPushEnabled(ok);
+  }
+
+  async function dismissAlarmAndStart() {
+    const type = alarmActive;
+    setAlarmActive(null);
+    await startConversation(type);
+  }
+
+  async function startConversation(type) {
+    setConversationType(type);
+    setErrorMessage('');
+    setMicNotice('');
+    setTypedAnswer('');
+    setLastResult(null);
+    setPhase('speaking');
+
+    const greeting =
+      type === 'morning'
+        ? `Ciao ${workerName}, dove andiamo oggi?`
+        : `Ciao ${workerName}, hai finito la giornata di lavoro? Cosa hai fatto oggi?`;
+
+    setAssistantMessage(greeting);
+    await speak(greeting);
+    enterAwaitingAnswer(type);
+  }
+
+  // Shows the "answer me" state (mic + text input) and, if a microphone is
+  // available, tries to start listening automatically in the background.
+  // A missing/denied microphone never blocks the flow: the operator can
+  // always just type the answer instead.
+  function enterAwaitingAnswer(type) {
+    setPhase('listening');
+    setMicNotice('');
+    if (!isVoiceSupported()) return;
+
+    listen()
+      .then((transcript) => {
+        if (transcript && transcript.trim()) {
+          processAnswer(type, transcript.trim());
+        }
+      })
+      .catch((err) => {
+        setMicNotice(
+          `Microfono non disponibile (${err.message}). Scrivi la risposta qui sotto.`
+        );
+      });
+  }
+
+  function submitTypedAnswer(e) {
+    e.preventDefault();
+    const text = typedAnswer.trim();
+    if (!text) return;
+    processAnswer(conversationType, text);
+  }
+
+  async function processAnswer(type, transcript) {
+    setTypedAnswer('');
+    setPhase('thinking');
+    try {
+      const result = type === 'morning' ? await api.startDay(transcript) : await api.endDay(transcript);
+
+      if (result.needsClarification) {
+        setAssistantMessage(result.reply);
+        setPhase('speaking');
+        await speak(result.reply);
+        enterAwaitingAnswer(type);
+        return;
+      }
+
+      setAssistantMessage(result.reply);
+      setLastResult(result);
+      setPhase('speaking');
+      await speak(result.reply);
+      setPhase('done');
+      refreshStatus();
+    } catch (err) {
+      setErrorMessage(err.message);
+      setPhase('error');
+    }
+  }
+
+  function reset() {
+    setPhase('idle');
+    setConversationType(null);
+    setAssistantMessage('');
+    setErrorMessage('');
+    setMicNotice('');
+    setTypedAnswer('');
+    setLastResult(null);
+  }
+
+  const hasOpenSession = Boolean(status?.openSession);
+
+  return (
+    <div className="assistant-screen">
+      {alarmActive && (
+        <div className="alarm-overlay">
+          <div className="alarm-pulse">🔔</div>
+          <h2>{alarmActive === 'morning' ? 'Buongiorno!' : 'Fine giornata!'}</h2>
+          <p>
+            {alarmActive === 'morning'
+              ? "È ora di iniziare la giornata di lavoro."
+              : 'È ora di raccontare cosa hai fatto oggi.'}
+          </p>
+          <button className="btn btn-primary btn-lg" onClick={dismissAlarmAndStart}>
+            Rispondi
+          </button>
+        </div>
+      )}
+
+      {!pushEnabled && (
+        <div className="card push-card">
+          <p>🔔 Attiva la sveglia automatica su questo telefono (avvisa anche ad app chiusa).</p>
+          <button className="btn btn-secondary" onClick={enablePush}>
+            Attiva notifiche
+          </button>
+        </div>
+      )}
+
+      <div className="status-card">
+        {hasOpenSession ? (
+          <>
+            <span className="status-dot status-dot-active" />
+            <div>
+              <strong>In turno</strong>
+              <p>
+                Cantiere: {status.openSession.jobsite?.name || 'N/D'}
+                {status.openSession.vehicle ? ` · Mezzo: ${status.openSession.vehicle.name}` : ''}
+              </p>
+              <p className="muted">
+                Iniziato alle {new Date(status.openSession.clockIn).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="status-dot" />
+            <div>
+              <strong>Nessun turno in corso</strong>
+              <p className="muted">Premi "Inizia giornata" quando parti per il cantiere.</p>
+            </div>
+          </>
+        )}
+      </div>
+
+      {phase === 'idle' && (
+        <div className="assistant-actions">
+          {!hasOpenSession && (
+            <button className="btn btn-primary btn-round" onClick={() => startConversation('morning')}>
+              🎙️ Inizia giornata
+            </button>
+          )}
+          {hasOpenSession && (
+            <button className="btn btn-primary btn-round" onClick={() => startConversation('evening')}>
+              🎙️ Fine giornata
+            </button>
+          )}
+        </div>
+      )}
+
+      {phase !== 'idle' && (
+        <div className="conversation-card">
+          <p className="assistant-bubble">🤖 {assistantMessage}</p>
+
+          {phase === 'listening' && (
+            <div className="listening-box">
+              {isListening && (
+                <>
+                  <div className="mic-pulse">🎙️</div>
+                  <p className="muted">Ti ascolto... parla pure</p>
+                  {interimTranscript && <p className="transcript-preview">"{interimTranscript}"</p>}
+                </>
+              )}
+              {micNotice && <p className="muted">🎤 {micNotice}</p>}
+
+              <form className="text-answer-form" onSubmit={submitTypedAnswer}>
+                <input
+                  type="text"
+                  className="text-answer-input"
+                  placeholder="Oppure scrivi qui la risposta..."
+                  value={typedAnswer}
+                  onChange={(e) => setTypedAnswer(e.target.value)}
+                  autoFocus
+                />
+                <button className="btn btn-primary btn-sm" type="submit" disabled={!typedAnswer.trim()}>
+                  Invia
+                </button>
+              </form>
+            </div>
+          )}
+
+          {phase === 'thinking' && <p className="muted">Sto elaborando...</p>}
+
+          {phase === 'error' && (
+            <>
+              <div className="alert alert-error">{errorMessage}</div>
+              <button className="btn btn-secondary" onClick={() => enterAwaitingAnswer(conversationType)}>
+                Riprova
+              </button>
+            </>
+          )}
+
+          {phase === 'done' && (
+            <>
+              {lastResult?.pdfDownloadUrl && (
+                <div className="alert alert-success">
+                  Rapportino generato{lastResult.emailSent ? ' e inviato alla segreteria ✅' : ''}
+                  {!lastResult.emailSent && lastResult.emailError ? ` (email non inviata: ${lastResult.emailError})` : ''}
+                  <br />
+                  <a
+                    className="link-btn"
+                    href={`${api.API_URL}${lastResult.pdfDownloadUrl}?token=${localStorage.getItem('workerToken') || ''}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Scarica PDF
+                  </a>
+                </div>
+              )}
+              <button className="btn btn-secondary" onClick={reset}>
+                Chiudi
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

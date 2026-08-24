@@ -1,0 +1,25 @@
+{
+  "name": "cantieri-backend",
+  "version": "1.0.0",
+  "description": "Backend per l'app Assistente Cantieri: gestione operai, mezzi, cantieri, assistente vocale AI, rapportini PDF e notifiche di sveglia.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "generate-vapid": "node src/scripts/generateVapidKeys.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.35.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "lowdb": "^7.0.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.16",
+    "openai": "^4.73.0",
+    "pdfkit": "^0.15.1",
+    "uuid": "^11.0.3",
+    "web-push": "^3.6.7"
+  }
+}

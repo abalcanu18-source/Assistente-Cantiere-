@@ -1,0 +1,175 @@
+import { Router } from 'express';
+import db, { newId } from '../db.js';
+import { requireWorker } from '../middleware/auth.js';
+import { interpretMorning, interpretEvening, isOpenAiConfigured } from '../services/openai.js';
+import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
+import { sendReportEmail } from '../services/email.js';
+
+const router = Router();
+
+function todayKey(date = new Date()) {
+  return date.toISOString().slice(0, 10); // YYYY-MM-DD, local-enough for a daily report
+}
+
+function findOpenSession(workerId) {
+  return db.data.sessions.find(
+    (s) => s.workerId === workerId && s.date === todayKey() && s.status === 'in_corso'
+  );
+}
+
+function enrichSession(session) {
+  const jobsite = db.data.jobsites.find((j) => j.id === session.jobsiteId) || null;
+  const vehicle = db.data.vehicles.find((v) => v.id === session.vehicleId) || null;
+  return { ...session, jobsite, vehicle };
+}
+
+// Lets the frontend know, on load, whether this worker already has an
+// open shift today (e.g. they refreshed the page after clocking in).
+router.get('/status', requireWorker, (req, res) => {
+  const worker = db.data.workers.find((w) => w.id === req.workerId);
+  const open = findOpenSession(req.workerId);
+  const lastCompleted = [...db.data.sessions]
+    .filter((s) => s.workerId === req.workerId && s.status === 'completato')
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+
+  res.json({
+    worker: { id: worker.id, name: worker.name },
+    openSession: open ? enrichSession(open) : null,
+    lastCompletedSession: lastCompleted ? enrichSession(lastCompleted) : null,
+  });
+});
+
+router.post('/start-day', requireWorker, async (req, res) => {
+  const { transcript } = req.body;
+  if (!transcript || !transcript.trim()) {
+    return res.status(400).json({ error: 'Nessun testo ricevuto dal microfono.' });
+  }
+
+  const worker = db.data.workers.find((w) => w.id === req.workerId);
+  if (!worker) return res.status(404).json({ error: 'Operaio non trovato.' });
+
+  const existing = findOpenSession(req.workerId);
+  if (existing) {
+    return res.json({
+      alreadyStarted: true,
+      reply: `Ciao ${worker.name}, hai già iniziato la giornata al cantiere ${
+        db.data.jobsites.find((j) => j.id === existing.jobsiteId)?.name || ''
+      }.`,
+      session: enrichSession(existing),
+    });
+  }
+
+  if (!isOpenAiConfigured()) {
+    return res.status(503).json({
+      error: 'L\'assistente AI non è configurato: manca OPENAI_API_KEY nel file .env del backend.',
+    });
+  }
+
+  let interpretation;
+  try {
+    interpretation = await interpretMorning({
+      workerName: worker.name,
+      transcript,
+      jobsites: db.data.jobsites,
+      vehicles: db.data.vehicles,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
+  }
+
+  if (!interpretation.confident || !interpretation.jobsiteId) {
+    return res.json({
+      needsClarification: true,
+      reply: interpretation.reply || 'Non ho capito bene, puoi ripetere il nome del cantiere?',
+    });
+  }
+
+  const session = {
+    id: newId(),
+    workerId: worker.id,
+    date: todayKey(),
+    jobsiteId: interpretation.jobsiteId,
+    vehicleId: interpretation.vehicleId || null,
+    clockIn: new Date().toISOString(),
+    clockOut: null,
+    morningTranscript: transcript,
+    eveningTranscript: null,
+    summary: null,
+    status: 'in_corso',
+    emailSent: false,
+  };
+
+  db.data.sessions.push(session);
+  await db.write();
+
+  res.status(201).json({ reply: interpretation.reply, session: enrichSession(session) });
+});
+
+router.post('/end-day', requireWorker, async (req, res) => {
+  const { transcript } = req.body;
+  if (!transcript || !transcript.trim()) {
+    return res.status(400).json({ error: 'Nessun testo ricevuto dal microfono.' });
+  }
+
+  const worker = db.data.workers.find((w) => w.id === req.workerId);
+  if (!worker) return res.status(404).json({ error: 'Operaio non trovato.' });
+
+  const session = findOpenSession(req.workerId);
+  if (!session) {
+    return res.status(400).json({ error: 'Non risulta nessun turno iniziato oggi per questo operaio.' });
+  }
+
+  if (!isOpenAiConfigured()) {
+    return res.status(503).json({
+      error: 'L\'assistente AI non è configurato: manca OPENAI_API_KEY nel file .env del backend.',
+    });
+  }
+
+  const jobsite = db.data.jobsites.find((j) => j.id === session.jobsiteId);
+
+  let interpretation;
+  try {
+    interpretation = await interpretEvening({
+      workerName: worker.name,
+      transcript,
+      jobsiteName: jobsite?.name,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
+  }
+
+  session.clockOut = new Date().toISOString();
+  session.eveningTranscript = transcript;
+  session.summary = interpretation.summary || transcript;
+  session.status = 'completato';
+
+  const vehicle = db.data.vehicles.find((v) => v.id === session.vehicleId);
+  const pdfBuffer = await generateReportPdfBuffer({
+    session,
+    worker,
+    vehicle,
+    jobsite,
+    companyName: db.data.settings.companyName,
+  });
+
+  const emailResult = await sendReportEmail({
+    pdfBuffer,
+    fileName: reportFileName(worker, session),
+    worker,
+    session,
+    toOverride: db.data.settings.secretaryEmail,
+  });
+  session.emailSent = emailResult.sent;
+
+  await db.write();
+
+  res.json({
+    reply: interpretation.reply || 'Buon lavoro, a domani!',
+    session: enrichSession(session),
+    pdfDownloadUrl: `/api/reports/${session.id}/pdf`,
+    emailSent: emailResult.sent,
+    emailError: emailResult.sent ? null : emailResult.error,
+  });
+});
+
+export default router;
