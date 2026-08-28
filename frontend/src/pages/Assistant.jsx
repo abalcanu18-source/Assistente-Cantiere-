@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { isVoiceSupported, useVoice } from '../useVoice.js';
+import { isVoiceSupported, useVoice, getAvailableVoices, onVoicesReady, getSavedVoiceName, saveVoiceName } from '../useVoice.js';
 import { setupPushNotifications } from '../push.js';
 import { playAlarmBeeps } from '../beep.js';
 
@@ -28,11 +28,27 @@ export default function Assistant({ workerName }) {
   const [alarmActive, setAlarmActive] = useState(null); // 'morning' | 'evening' | null
   const [pushEnabled, setPushEnabled] = useState(false);
   const [lastResult, setLastResult] = useState(null);
+  const [voices, setVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(getSavedVoiceName());
   const alarmFiredRef = useRef({ morning: null, evening: null });
 
   const refreshStatus = useCallback(() => {
     api.voiceStatus().then(setStatus).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = onVoicesReady(() => setVoices(getAvailableVoices()));
+    return unsubscribe;
+  }, []);
+
+  function changeVoice(name) {
+    setSelectedVoice(name);
+    saveVoiceName(name);
+  }
+
+  function testVoice() {
+    speak('Ciao, questa è la mia voce. Dove andiamo oggi?');
+  }
 
   useEffect(() => {
     refreshStatus();
@@ -200,6 +216,28 @@ export default function Assistant({ workerName }) {
           <p>🔔 Attiva la sveglia automatica su questo telefono (avvisa anche ad app chiusa).</p>
           <button className="btn btn-secondary" onClick={enablePush}>
             Attiva notifiche
+          </button>
+        </div>
+      )}
+
+      {voices.length > 0 && (
+        <div className="card push-card">
+          <p>🗣️ Voce dell'assistente (solo su questo telefono)</p>
+          <select
+            className="text-answer-input"
+            style={{ width: '100%' }}
+            value={selectedVoice}
+            onChange={(e) => changeVoice(e.target.value)}
+          >
+            <option value="">Predefinita del telefono</option>
+            {voices.map((v) => (
+              <option key={v.name} value={v.name}>
+                {v.name} {v.lang ? `(${v.lang})` : ''}
+              </option>
+            ))}
+          </select>
+          <button className="btn btn-secondary btn-sm" onClick={testVoice}>
+            🔊 Prova voce
           </button>
         </div>
       )}

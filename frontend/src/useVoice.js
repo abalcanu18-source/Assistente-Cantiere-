@@ -7,6 +7,35 @@ export function isVoiceSupported() {
   return Boolean(SpeechRecognitionImpl) && 'speechSynthesis' in window;
 }
 
+const VOICE_PREF_KEY = 'assistantVoiceName';
+
+// Voices are only reliably available after the browser fires
+// 'voiceschanged' at least once (varies a lot by device/browser).
+export function getAvailableVoices() {
+  if (!('speechSynthesis' in window)) return [];
+  const all = window.speechSynthesis.getVoices();
+  const italian = all.filter((v) => v.lang?.toLowerCase().startsWith('it'));
+  return italian.length > 0 ? italian : all;
+}
+
+export function onVoicesReady(callback) {
+  if (!('speechSynthesis' in window)) return () => {};
+  const existing = window.speechSynthesis.getVoices();
+  if (existing.length > 0) callback(existing);
+  const handler = () => callback(window.speechSynthesis.getVoices());
+  window.speechSynthesis.addEventListener('voiceschanged', handler);
+  return () => window.speechSynthesis.removeEventListener('voiceschanged', handler);
+}
+
+export function getSavedVoiceName() {
+  return localStorage.getItem(VOICE_PREF_KEY) || '';
+}
+
+export function saveVoiceName(name) {
+  if (name) localStorage.setItem(VOICE_PREF_KEY, name);
+  else localStorage.removeItem(VOICE_PREF_KEY);
+}
+
 /**
  * Thin wrapper around the browser's built-in speech APIs: SpeechRecognition
  * for listening (free, on-device/near-realtime, no server upload needed)
@@ -81,6 +110,13 @@ export function useVoice() {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'it-IT';
       utterance.rate = 1;
+
+      const savedName = getSavedVoiceName();
+      if (savedName) {
+        const match = window.speechSynthesis.getVoices().find((v) => v.name === savedName);
+        if (match) utterance.voice = match;
+      }
+
       utterance.onend = () => {
         setIsSpeaking(false);
         resolve();
