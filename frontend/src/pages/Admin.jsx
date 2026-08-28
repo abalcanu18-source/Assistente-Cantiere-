@@ -206,6 +206,27 @@ function SettingsTab() {
           <input type="time" value={settings.alarmEvening || ''} onChange={(e) => setSettings({ ...settings, alarmEvening: e.target.value })} />
         </label>
         <label>
+          Orario 2° promemoria sera (per chi non ha ancora chiuso)
+          <input type="time" value={settings.alarmEvening2 || ''} onChange={(e) => setSettings({ ...settings, alarmEvening2: e.target.value })} />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={settings.weekdaysOnly !== false}
+            onChange={(e) => setSettings({ ...settings, weekdaysOnly: e.target.checked })}
+            style={{ width: 'auto', marginRight: 8 }}
+          />
+          Solo lunedì-venerdì (sveglie disattivate nel weekend)
+        </label>
+        <label>
+          L'app si può usare dalle
+          <input type="time" value={settings.workDayStart || ''} onChange={(e) => setSettings({ ...settings, workDayStart: e.target.value })} />
+        </label>
+        <label>
+          ...alle
+          <input type="time" value={settings.workDayEnd || ''} onChange={(e) => setSettings({ ...settings, workDayEnd: e.target.value })} />
+        </label>
+        <label>
           Email segreteria (riceve i PDF)
           <input type="email" value={settings.secretaryEmail || ''} onChange={(e) => setSettings({ ...settings, secretaryEmail: e.target.value })} />
         </label>

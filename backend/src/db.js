@@ -21,12 +21,21 @@ const defaultData = {
     companyName: 'La Mia Azienda',
     alarmMorning: '06:30',
     alarmEvening: '17:00',
+    // Secondo promemoria di fine giornata (a distanza di mezz'ora dal
+    // primo), per chi non ha visto/sentito il primo avviso.
+    alarmEvening2: '17:30',
     secretaryEmail: '',
     // 'digest' = un'unica email al giorno con tutti i rapportini allegati
     // (consigliato). 'immediate' = una email separata ogni volta che un
     // operaio finisce il turno (comportamento precedente).
     emailMode: 'digest',
     digestSendTime: '19:00',
+    // Finestra oraria in cui l'app permette di timbrare la giornata
+    // (fuori da questa fascia i pulsanti sono disattivati). Pensata per un
+    // orario di lavoro tipico da lunedì a venerdì.
+    workDayStart: '06:00',
+    workDayEnd: '18:00',
+    weekdaysOnly: true,
   },
 };
 

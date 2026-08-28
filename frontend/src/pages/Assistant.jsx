@@ -14,6 +14,25 @@ function isNowNear(hhmm, windowMinutes = 5) {
   return diffMinutes <= windowMinutes;
 }
 
+// Gates the "Inizia giornata" button to the configured working window
+// (by default Mon-Fri, 06:00-18:00), so the app doesn't invite people to
+// clock in at 3am or on a Sunday.
+function isWithinWorkWindow(settings) {
+  const { workDayStart, workDayEnd, weekdaysOnly } = settings || {};
+  if (!workDayStart || !workDayEnd) return true;
+
+  const now = new Date();
+  if (weekdaysOnly !== false) {
+    const day = now.getDay(); // 0 = domenica, 6 = sabato
+    if (day === 0 || day === 6) return false;
+  }
+
+  const [startH, startM] = workDayStart.split(':').map(Number);
+  const [endH, endM] = workDayEnd.split(':').map(Number);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  return nowMinutes >= startH * 60 + startM && nowMinutes <= endH * 60 + endM;
+}
+
 export default function Assistant({ workerName }) {
   const { listen, speak, isListening, interimTranscript } = useVoice();
 
@@ -34,7 +53,8 @@ export default function Assistant({ workerName }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
-  const alarmFiredRef = useRef({ morning: null, evening: null });
+  const [, setTick] = useState(0);
+  const alarmFiredRef = useRef({ morning: null, evening: null, evening2: null });
 
   const refreshStatus = useCallback(() => {
     api.voiceStatus().then(setStatus).catch(() => {});
@@ -61,10 +81,15 @@ export default function Assistant({ workerName }) {
 
   // Foreground fallback "alarm": works even without push permission, as
   // long as the app is open. Checks every 20s if we've just crossed the
-  // configured morning/evening time and haven't already fired today.
+  // configured morning/evening time and haven't already fired today. Also
+  // used to force a re-render every 20s so the "Inizia giornata" button
+  // enables/disables itself right when the working window opens/closes,
+  // without needing a page refresh.
   useEffect(() => {
     const interval = setInterval(() => {
-      if (!settings.alarmMorning && !settings.alarmEvening) return;
+      setTick((t) => t + 1);
+
+      if (!settings.alarmMorning && !settings.alarmEvening && !settings.alarmEvening2) return;
       const todayKey = new Date().toISOString().slice(0, 10);
 
       if (isNowNear(settings.alarmMorning, 1) && alarmFiredRef.current.morning !== todayKey && !status?.openSession) {
@@ -77,6 +102,14 @@ export default function Assistant({ workerName }) {
         status?.openSession
       ) {
         alarmFiredRef.current.evening = todayKey;
+        triggerAlarm('evening');
+      }
+      if (
+        isNowNear(settings.alarmEvening2, 1) &&
+        alarmFiredRef.current.evening2 !== todayKey &&
+        status?.openSession
+      ) {
+        alarmFiredRef.current.evening2 = todayKey;
         triggerAlarm('evening');
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,6 +289,7 @@ export default function Assistant({ workerName }) {
   }
 
   const hasOpenSession = Boolean(status?.openSession);
+  const withinWorkWindow = isWithinWorkWindow(settings);
 
   return (
     <div className="assistant-screen">
@@ -336,10 +370,16 @@ export default function Assistant({ workerName }) {
 
       {phase === 'idle' && !chatOpen && (
         <div className="assistant-actions" style={{ flexDirection: 'column', gap: 14 }}>
-          {!hasOpenSession && (
+          {!hasOpenSession && withinWorkWindow && (
             <button className="btn btn-primary btn-round" onClick={() => startConversation('morning')}>
               🎙️ Inizia giornata
             </button>
+          )}
+          {!hasOpenSession && !withinWorkWindow && (
+            <p className="muted" style={{ textAlign: 'center', maxWidth: 260 }}>
+              L'assistente è disponibile {settings.weekdaysOnly !== false ? 'dal lunedì al venerdì, ' : ''}
+              dalle {settings.workDayStart} alle {settings.workDayEnd}.
+            </p>
           )}
           {hasOpenSession && (
             <button className="btn btn-primary btn-round" onClick={() => startConversation('evening')}>
