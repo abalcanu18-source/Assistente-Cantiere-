@@ -1,0 +1,19 @@
+name: Keep backend awake
+
+# Il piano gratuito di Render mette il backend "in pausa" dopo ~15 minuti
+# senza richieste, il che bloccherebbe anche le sveglie automatiche (6:30,
+# 17:00, 17:30). Questo workflow gira gratis su GitHub (repo pubblico =
+# minuti illimitati) e ogni 10 minuti fa una richiesta al backend, cosi'
+# non si addormenta mai.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: curl -fsS https://cantieri-backend.onrender.com/api/health
