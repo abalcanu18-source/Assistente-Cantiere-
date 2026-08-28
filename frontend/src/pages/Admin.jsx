@@ -209,6 +209,26 @@ function SettingsTab() {
           Email segreteria (riceve i PDF)
           <input type="email" value={settings.secretaryEmail || ''} onChange={(e) => setSettings({ ...settings, secretaryEmail: e.target.value })} />
         </label>
+        <label>
+          Modalità invio email
+          <select
+            value={settings.emailMode || 'digest'}
+            onChange={(e) => setSettings({ ...settings, emailMode: e.target.value })}
+          >
+            <option value="digest">Un'unica email al giorno con tutti i rapportini (consigliato)</option>
+            <option value="immediate">Un'email separata ogni volta che un operaio finisce</option>
+          </select>
+        </label>
+        {(settings.emailMode || 'digest') === 'digest' && (
+          <label>
+            Orario invio email giornaliera
+            <input
+              type="time"
+              value={settings.digestSendTime || '19:00'}
+              onChange={(e) => setSettings({ ...settings, digestSendTime: e.target.value })}
+            />
+          </label>
+        )}
         <button className="btn btn-primary" type="submit">Salva impostazioni</button>
       </form>
     </div>
@@ -218,15 +238,45 @@ function SettingsTab() {
 function ReportsTab() {
   const [reports, setReports] = useState([]);
   const [error, setError] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
 
-  useEffect(() => {
-    api.allReports().then(setReports).catch((e) => setError(e.message));
-  }, []);
+  const load = () => api.allReports().then(setReports).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, []);
+
+  async function sendToday() {
+    setSending(true);
+    setSendResult(null);
+    setError('');
+    try {
+      const result = await api.sendDailyDigest(new Date().toISOString().slice(0, 10));
+      setSendResult(result);
+      load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSending(false);
+    }
+  }
 
   return (
     <div>
       <h3>Tutti i rapportini</h3>
       {error && <div className="alert alert-error">{error}</div>}
+
+      <div className="admin-form" style={{ marginBottom: 16 }}>
+        <button className="btn btn-secondary" onClick={sendToday} disabled={sending}>
+          {sending ? 'Invio...' : '📧 Invia rapportini di oggi ora'}
+        </button>
+      </div>
+
+      {sendResult && (
+        <div className={`alert ${sendResult.sent ? 'alert-success' : 'alert-error'}`} style={{ marginBottom: 16 }}>
+          {sendResult.sent
+            ? `Email inviata con ${sendResult.count} rapportino/i.`
+            : sendResult.error || 'Invio non riuscito.'}
+        </div>
+      )}
       <table className="admin-table">
         <thead>
           <tr><th>Data</th><th>Operaio</th><th>Cantiere</th><th>Email inviata</th><th></th></tr>

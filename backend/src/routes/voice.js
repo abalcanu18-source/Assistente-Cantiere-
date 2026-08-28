@@ -153,22 +153,31 @@ router.post('/end-day', requireWorker, async (req, res) => {
   session.status = 'completato';
 
   const vehicle = resolveVehicle(session);
-  const pdfBuffer = await generateReportPdfBuffer({
-    session,
-    worker,
-    vehicle,
-    jobsite,
-    companyName: db.data.settings.companyName,
-  });
+  const digestMode = (db.data.settings.emailMode || 'digest') !== 'immediate';
 
-  const emailResult = await sendReportEmail({
-    pdfBuffer,
-    fileName: reportFileName(worker, session),
-    worker,
-    session,
-    toOverride: db.data.settings.secretaryEmail,
-  });
-  session.emailSent = emailResult.sent;
+  let emailResult = { sent: false, error: null };
+  if (digestMode) {
+    // Don't send yet: this report will go out later today in a single
+    // email together with everyone else's, via the scheduled digest job
+    // (or the admin's "Invia adesso" button).
+    session.emailSent = false;
+  } else {
+    const pdfBuffer = await generateReportPdfBuffer({
+      session,
+      worker,
+      vehicle,
+      jobsite,
+      companyName: db.data.settings.companyName,
+    });
+    emailResult = await sendReportEmail({
+      pdfBuffer,
+      fileName: reportFileName(worker, session),
+      worker,
+      session,
+      toOverride: db.data.settings.secretaryEmail,
+    });
+    session.emailSent = emailResult.sent;
+  }
 
   await db.write();
 
@@ -178,6 +187,7 @@ router.post('/end-day', requireWorker, async (req, res) => {
     pdfDownloadUrl: `/api/reports/${session.id}/pdf`,
     emailSent: emailResult.sent,
     emailError: emailResult.sent ? null : emailResult.error,
+    emailPending: digestMode,
   });
 });
 

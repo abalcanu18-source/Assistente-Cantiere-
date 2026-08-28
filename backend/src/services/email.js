@@ -52,3 +52,36 @@ export async function sendReportEmail({ pdfBuffer, fileName, worker, session, to
     return { sent: false, error: err.message };
   }
 }
+
+/**
+ * Sends ONE email with every worker's PDF report for a given day attached
+ * together, instead of one email per worker. This is the default mode:
+ * the secretary gets a single message per day with everything inside.
+ */
+export async function sendDailyDigestEmail({ reports, date, toOverride }) {
+  const to = toOverride || process.env.SECRETARY_EMAIL;
+  const t = getTransporter();
+
+  if (!t || !to) {
+    return { sent: false, error: 'Email non configurata (SMTP o indirizzo segreteria mancante nelle impostazioni).' };
+  }
+  if (!reports || reports.length === 0) {
+    return { sent: false, error: 'Nessun rapportino da inviare per questo giorno.' };
+  }
+
+  const dateLabel = new Date(date).toLocaleDateString('it-IT');
+  const workerNames = reports.map((r) => r.workerName).join(', ');
+
+  try {
+    await t.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject: `Rapportini di lavoro - ${dateLabel} (${reports.length})`,
+      text: `In allegato i rapportini di lavoro del giorno ${dateLabel} per: ${workerNames}.\n\nGenerato automaticamente da Assistente Cantieri.`,
+      attachments: reports.map((r) => ({ filename: r.fileName, content: r.pdfBuffer })),
+    });
+    return { sent: true };
+  } catch (err) {
+    return { sent: false, error: err.message };
+  }
+}

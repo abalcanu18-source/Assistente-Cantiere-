@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import db from '../db.js';
-import { requireWorker, getWorkerIdFromToken } from '../middleware/auth.js';
+import { requireAdmin, requireWorker, getWorkerIdFromToken } from '../middleware/auth.js';
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
 import { resolveJobsite, resolveVehicle } from '../services/sessionHelpers.js';
+import { sendDigestForDate } from '../services/digest.js';
 
 const router = Router();
 
@@ -39,6 +40,18 @@ router.get('/', (req, res) => {
 
   sessions = sessions.sort((a, b) => new Date(b.date) - new Date(a.date)).map(enrich);
   res.json(sessions);
+});
+
+// Admin-only: sends the once-a-day digest email right now, for a given
+// date (defaults to today), instead of waiting for the scheduled time.
+router.post('/send-daily', requireAdmin, async (req, res) => {
+  const date = req.body?.date || new Date().toISOString().slice(0, 10);
+  try {
+    const result = await sendDigestForDate(date);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ sent: false, error: err.message });
+  }
 });
 
 router.get('/:id/pdf', async (req, res) => {

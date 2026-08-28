@@ -329,8 +329,10 @@ export default function Assistant({ workerName }) {
             <>
               {lastResult?.pdfDownloadUrl && (
                 <div className="alert alert-success">
-                  Rapportino generato{lastResult.emailSent ? ' e inviato alla segreteria ✅' : ''}
-                  {!lastResult.emailSent && lastResult.emailError ? ` (email non inviata: ${lastResult.emailError})` : ''}
+                  Rapportino generato
+                  {lastResult.emailSent && ' e inviato alla segreteria ✅'}
+                  {!lastResult.emailSent && lastResult.emailPending && ' — verrà inviato insieme agli altri rapportini di oggi 📧'}
+                  {!lastResult.emailSent && !lastResult.emailPending && lastResult.emailError && ` (email non inviata: ${lastResult.emailError})`}
                   <br />
                   <a
                     className="link-btn"

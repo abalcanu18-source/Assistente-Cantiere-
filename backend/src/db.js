@@ -22,6 +22,11 @@ const defaultData = {
     alarmMorning: '06:30',
     alarmEvening: '17:00',
     secretaryEmail: '',
+    // 'digest' = un'unica email al giorno con tutti i rapportini allegati
+    // (consigliato). 'immediate' = una email separata ogni volta che un
+    // operaio finisce il turno (comportamento precedente).
+    emailMode: 'digest',
+    digestSendTime: '19:00',
   },
 };
 

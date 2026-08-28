@@ -61,6 +61,8 @@ export const api = {
     const qs = new URLSearchParams(params).toString();
     return request(`/api/reports${qs ? `?${qs}` : ''}`, { auth: 'admin' });
   },
+  sendDailyDigest: (date) =>
+    request('/api/reports/send-daily', { method: 'POST', body: { date }, auth: 'admin' }),
   reportPdfUrl: (id) => `${API_URL}/api/reports/${id}/pdf?token=${getWorkerToken() || ''}`,
 
   // Settings
