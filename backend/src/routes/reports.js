@@ -2,14 +2,15 @@ import { Router } from 'express';
 import db from '../db.js';
 import { requireWorker, getWorkerIdFromToken } from '../middleware/auth.js';
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
+import { resolveJobsite, resolveVehicle } from '../services/sessionHelpers.js';
 
 const router = Router();
 
 function enrich(session) {
   return {
     ...session,
-    jobsite: db.data.jobsites.find((j) => j.id === session.jobsiteId) || null,
-    vehicle: db.data.vehicles.find((v) => v.id === session.vehicleId) || null,
+    jobsite: resolveJobsite(session),
+    vehicle: resolveVehicle(session),
     worker: (() => {
       const w = db.data.workers.find((w) => w.id === session.workerId);
       return w ? { id: w.id, name: w.name } : null;
@@ -69,8 +70,8 @@ router.get('/:id/pdf', async (req, res) => {
   // Regenerated on demand from the persisted session data instead of being
   // read from disk -- identical output, but nothing to lose if the host's
   // filesystem gets wiped between requests.
-  const jobsite = db.data.jobsites.find((j) => j.id === session.jobsiteId) || null;
-  const vehicle = db.data.vehicles.find((v) => v.id === session.vehicleId) || null;
+  const jobsite = resolveJobsite(session);
+  const vehicle = resolveVehicle(session);
   const pdfBuffer = await generateReportPdfBuffer({
     session,
     worker,

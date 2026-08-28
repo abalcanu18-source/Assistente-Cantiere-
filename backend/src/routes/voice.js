@@ -4,6 +4,7 @@ import { requireWorker } from '../middleware/auth.js';
 import { interpretMorning, interpretEvening, isOpenAiConfigured } from '../services/openai.js';
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
 import { sendReportEmail } from '../services/email.js';
+import { enrichSession, resolveJobsite, resolveVehicle, findOrCreateJobsite, findOrCreateVehicle } from '../services/sessionHelpers.js';
 
 const router = Router();
 
@@ -15,12 +16,6 @@ function findOpenSession(workerId) {
   return db.data.sessions.find(
     (s) => s.workerId === workerId && s.date === todayKey() && s.status === 'in_corso'
   );
-}
-
-function enrichSession(session) {
-  const jobsite = db.data.jobsites.find((j) => j.id === session.jobsiteId) || null;
-  const vehicle = db.data.vehicles.find((v) => v.id === session.vehicleId) || null;
-  return { ...session, jobsite, vehicle };
 }
 
 // Lets the frontend know, on load, whether this worker already has an
@@ -53,7 +48,7 @@ router.post('/start-day', requireWorker, async (req, res) => {
     return res.json({
       alreadyStarted: true,
       reply: `Ciao ${worker.name}, hai già iniziato la giornata al cantiere ${
-        db.data.jobsites.find((j) => j.id === existing.jobsiteId)?.name || ''
+        resolveJobsite(existing)?.name || ''
       }.`,
       session: enrichSession(existing),
     });
@@ -77,19 +72,33 @@ router.post('/start-day', requireWorker, async (req, res) => {
     return res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
   }
 
-  if (!interpretation.confident || !interpretation.jobsiteId) {
+  if (!interpretation.confident || !interpretation.jobsiteName) {
     return res.json({
       needsClarification: true,
       reply: interpretation.reply || 'Non ho capito bene, puoi ripetere il nome del cantiere?',
     });
   }
 
+  // Auto-save any never-seen-before jobsite/vehicle name so it shows up in
+  // Admin from now on and gets recognized automatically next time.
+  let jobsite = interpretation.jobsiteId
+    ? db.data.jobsites.find((j) => j.id === interpretation.jobsiteId)
+    : null;
+  if (!jobsite) jobsite = findOrCreateJobsite(interpretation.jobsiteName);
+
+  let vehicle = interpretation.vehicleId
+    ? db.data.vehicles.find((v) => v.id === interpretation.vehicleId)
+    : null;
+  if (!vehicle && interpretation.vehicleName) vehicle = findOrCreateVehicle(interpretation.vehicleName);
+
   const session = {
     id: newId(),
     workerId: worker.id,
     date: todayKey(),
-    jobsiteId: interpretation.jobsiteId,
-    vehicleId: interpretation.vehicleId || null,
+    jobsiteId: jobsite ? jobsite.id : null,
+    jobsiteName: interpretation.jobsiteName,
+    vehicleId: vehicle ? vehicle.id : null,
+    vehicleName: interpretation.vehicleName || null,
     clockIn: new Date().toISOString(),
     clockOut: null,
     morningTranscript: transcript,
@@ -125,7 +134,7 @@ router.post('/end-day', requireWorker, async (req, res) => {
     });
   }
 
-  const jobsite = db.data.jobsites.find((j) => j.id === session.jobsiteId);
+  const jobsite = resolveJobsite(session);
 
   let interpretation;
   try {
@@ -143,7 +152,7 @@ router.post('/end-day', requireWorker, async (req, res) => {
   session.summary = interpretation.summary || transcript;
   session.status = 'completato';
 
-  const vehicle = db.data.vehicles.find((v) => v.id === session.vehicleId);
+  const vehicle = resolveVehicle(session);
   const pdfBuffer = await generateReportPdfBuffer({
     session,
     worker,

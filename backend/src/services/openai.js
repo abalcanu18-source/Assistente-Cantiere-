@@ -37,33 +37,45 @@ async function askJson(systemPrompt, userPrompt) {
 
 /**
  * Interprets the operator's morning answer ("andiamo al cantiere via
- * roma...") against the real list of job sites/vehicles, and produces a
- * short spoken confirmation. If it can't confidently match a job site, it
- * asks the operator to repeat/clarify instead of guessing.
+ * roma..."). Many companies never provide a fixed list of job sites/vehicles
+ * in advance, so this NEVER requires a match against `jobsites`/`vehicles`:
+ * it always extracts the place/vehicle name exactly as spoken (free text).
+ * If a matching entry happens to already exist in the provided lists, it
+ * also links the corresponding id (useful for reporting), but that's a
+ * bonus, not a requirement. It only asks to repeat if the operator didn't
+ * actually say where they're going at all.
  */
-export async function interpretMorning({ workerName, transcript, jobsites, vehicles }) {
+export async function interpretMorning({ workerName, transcript, jobsites = [], vehicles = [] }) {
   const systemPrompt = `Sei un assistente vocale per operai edili in italiano, amichevole e diretto.
-Il tuo compito la mattina è capire a QUALE cantiere e con QUALE mezzo (se menzionato) sta andando l'operaio,
-scegliendo SOLO tra gli elenchi forniti (non inventare nomi nuovi).
+Il tuo compito la mattina è capire a QUALE cantiere/luogo di lavoro sta andando l'operaio e, se lo dice,
+CON QUALE mezzo. L'operaio può nominare un cantiere QUALSIASI, anche uno mai sentito prima e non presente
+negli elenchi qui sotto: in quel caso scrivi comunque il nome/luogo esattamente come lo ha detto (pulito,
+senza inventare dettagli). Non rifiutare MAI una risposta solo perché il cantiere non è in elenco.
+Se il nome corrisponde chiaramente a uno degli elenchi forniti, riporta anche l'id corrispondente (comodo
+per i report), altrimenti lascialo null.
 Rispondi SEMPRE in JSON con questa forma esatta:
 {
-  "jobsiteId": "<id del cantiere scelto oppure null>",
-  "vehicleId": "<id del mezzo scelto oppure null>",
+  "jobsiteName": "<nome del cantiere/luogo di lavoro indicato dall'operaio>",
+  "jobsiteId": "<id del cantiere in elenco se corrisponde, altrimenti null>",
+  "vehicleName": "<nome/targa del mezzo se menzionato, altrimenti null>",
+  "vehicleId": "<id del mezzo in elenco se corrisponde, altrimenti null>",
   "confident": true/false,
   "reply": "<breve frase parlata da dire all'operaio, in italiano, massimo 2 frasi>"
 }
-Se non riesci a capire con certezza il cantiere, metti "confident": false e nella "reply" chiedi di ripetere
-in modo semplice, elencando magari 2-3 opzioni plausibili. Se capisci il cantiere ma non il mezzo, va bene
-comunque "confident": true con "vehicleId": null. Usa un tono breve, umano, mai robotico.`;
+Metti "confident": false SOLO se l'operaio non ha detto affatto dove sta andando (frase incomprensibile,
+vuota o fuori tema): in quel caso nella "reply" chiedi gentilmente di ripetere/specificare il cantiere.
+Se ha nominato un posto qualsiasi (anche mai sentito prima), è sempre "confident": true. Tono breve, umano,
+mai robotico.`;
 
   const userPrompt = `Operaio: ${workerName}
 Frase detta dall'operaio: "${transcript}"
 
-Cantieri disponibili (id | nome | indirizzo):
-${jobsites.map((j) => `${j.id} | ${j.name} | ${j.address}`).join('\n') || '(nessuno configurato)'}
+Cantieri già noti in azienda (id | nome | indirizzo) - usali solo per riconoscere un nome già esistente,
+l'operaio può comunque nominarne uno nuovo che non è in questa lista:
+${jobsites.map((j) => `${j.id} | ${j.name} | ${j.address}`).join('\n') || '(nessuno configurato ancora)'}
 
-Mezzi disponibili (id | nome):
-${vehicles.map((v) => `${v.id} | ${v.name}`).join('\n') || '(nessuno configurato)'}`;
+Mezzi già noti in azienda (id | nome):
+${vehicles.map((v) => `${v.id} | ${v.name}`).join('\n') || '(nessuno configurato ancora)'}`;
 
   return askJson(systemPrompt, userPrompt);
 }
