@@ -244,6 +244,16 @@ function ReportsTab() {
   const load = () => api.allReports().then(setReports).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
 
+  async function remove(id) {
+    if (!confirm('Eliminare definitivamente questo rapportino?')) return;
+    try {
+      await api.deleteReport(id, 'admin');
+      load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function sendToday() {
     setSending(true);
     setSendResult(null);
@@ -288,7 +298,7 @@ function ReportsTab() {
               <td>{r.worker?.name}</td>
               <td>{r.jobsite?.name || '-'}</td>
               <td>{r.emailSent ? '✅' : '❌'}</td>
-              <td>
+              <td style={{ display: 'flex', gap: 6 }}>
                 <a
                   className="btn btn-secondary btn-sm"
                   href={`${api.API_URL}/api/reports/${r.id}/pdf?adminPassword=${encodeURIComponent(sessionStorage.getItem('adminPassword') || '')}`}
@@ -297,6 +307,9 @@ function ReportsTab() {
                 >
                   PDF
                 </a>
+                <button className="btn btn-danger btn-sm" onClick={() => remove(r.id)}>
+                  Elimina
+                </button>
               </td>
             </tr>
           ))}

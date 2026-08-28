@@ -54,6 +54,29 @@ router.post('/send-daily', requireAdmin, async (req, res) => {
   }
 });
 
+// Deletes a report/session (e.g. the operator said the wrong jobsite, or
+// made a mistake in the evening summary). Allowed for the admin, or for the
+// worker who owns the session -- including an "in_corso" (not yet finished)
+// shift, so a wrong morning check-in can be cancelled and redone.
+router.delete('/:id', async (req, res) => {
+  const session = db.data.sessions.find((s) => s.id === req.params.id);
+  if (!session) return res.status(404).json({ error: 'Rapportino non trovato.' });
+
+  const isAdmin = req.headers['x-admin-password'] === process.env.ADMIN_PASSWORD;
+  if (!isAdmin) {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : req.query.token;
+    const workerId = getWorkerIdFromToken(token);
+    if (!workerId || workerId !== session.workerId) {
+      return res.status(401).json({ error: 'Accesso non autorizzato.' });
+    }
+  }
+
+  db.data.sessions = db.data.sessions.filter((s) => s.id !== req.params.id);
+  await db.write();
+  res.status(204).end();
+});
+
 router.get('/:id/pdf', async (req, res) => {
   const session = db.data.sessions.find((s) => s.id === req.params.id);
   if (!session) {

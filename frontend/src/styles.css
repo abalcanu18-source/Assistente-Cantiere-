@@ -416,3 +416,44 @@ button {
 @media (min-width: 640px) {
   .worker-grid { grid-template-columns: 1fr 1fr 1fr; }
 }
+
+/* Free chat */
+.chat-card {
+  background: var(--navy-700);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chat-bubble {
+  padding: 10px 14px;
+  border-radius: 14px;
+  max-width: 85%;
+  line-height: 1.4;
+  font-size: 0.95rem;
+}
+
+.chat-bubble-ai {
+  background: var(--navy-600);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-bubble-user {
+  background: var(--accent);
+  color: var(--navy-900);
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+  font-weight: 500;
+}

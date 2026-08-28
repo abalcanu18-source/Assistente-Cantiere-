@@ -54,6 +54,7 @@ export const api = {
   voiceStatus: () => request('/api/voice/status'),
   startDay: (transcript) => request('/api/voice/start-day', { method: 'POST', body: { transcript } }),
   endDay: (transcript) => request('/api/voice/end-day', { method: 'POST', body: { transcript } }),
+  chat: (history) => request('/api/voice/chat', { method: 'POST', body: { history } }),
 
   // Reports
   myReports: () => request('/api/reports/mine'),
@@ -63,6 +64,7 @@ export const api = {
   },
   sendDailyDigest: (date) =>
     request('/api/reports/send-daily', { method: 'POST', body: { date }, auth: 'admin' }),
+  deleteReport: (id, auth = 'worker') => request(`/api/reports/${id}`, { method: 'DELETE', auth }),
   reportPdfUrl: (id) => `${API_URL}/api/reports/${id}/pdf?token=${getWorkerToken() || ''}`,
 
   // Settings

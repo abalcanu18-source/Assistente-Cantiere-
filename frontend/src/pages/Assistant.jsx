@@ -30,6 +30,10 @@ export default function Assistant({ workerName }) {
   const [lastResult, setLastResult] = useState(null);
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState(getSavedVoiceName());
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
   const alarmFiredRef = useRef({ morning: null, evening: null });
 
   const refreshStatus = useCallback(() => {
@@ -109,6 +113,17 @@ export default function Assistant({ workerName }) {
     await startConversation(type);
   }
 
+  async function cancelShift() {
+    if (!status?.openSession) return;
+    if (!confirm('Annullare il turno di oggi? (es. hai sbagliato a dire il cantiere) Potrai ricominciare da capo.')) return;
+    try {
+      await api.deleteReport(status.openSession.id);
+      refreshStatus();
+    } catch (err) {
+      setErrorMessage(err.message);
+    }
+  }
+
   async function startConversation(type) {
     setConversationType(type);
     setErrorMessage('');
@@ -180,6 +195,54 @@ export default function Assistant({ workerName }) {
       setErrorMessage(err.message);
       setPhase('error');
     }
+  }
+
+  // Free chat: "chiedi qualsiasi cosa all'assistente", separate from the
+  // fixed morning/evening flow above. Talk to it just like any AI chat.
+  function openChat() {
+    setChatOpen(true);
+    setChatInput('');
+    const greeting = `Ciao ${workerName}, dimmi pure, chiedimi quello che vuoi.`;
+    setChatMessages([{ role: 'assistant', content: greeting }]);
+    speak(greeting);
+  }
+
+  function closeChat() {
+    setChatOpen(false);
+    setChatMessages([]);
+    setChatInput('');
+  }
+
+  async function sendChat(text) {
+    const trimmed = text.trim();
+    if (!trimmed || chatBusy) return;
+    const withUser = [...chatMessages, { role: 'user', content: trimmed }];
+    setChatMessages(withUser);
+    setChatInput('');
+    setChatBusy(true);
+    try {
+      const { reply } = await api.chat(withUser);
+      setChatMessages([...withUser, { role: 'assistant', content: reply }]);
+      await speak(reply);
+    } catch (err) {
+      setChatMessages([...withUser, { role: 'assistant', content: `⚠️ ${err.message}` }]);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
+  function submitChat(e) {
+    e.preventDefault();
+    sendChat(chatInput);
+  }
+
+  function listenForChat() {
+    if (!isVoiceSupported()) return;
+    listen()
+      .then((transcript) => {
+        if (transcript && transcript.trim()) sendChat(transcript.trim());
+      })
+      .catch((err) => setMicNotice(`Microfono non disponibile (${err.message}).`));
   }
 
   function reset() {
@@ -255,6 +318,9 @@ export default function Assistant({ workerName }) {
               <p className="muted">
                 Iniziato alle {new Date(status.openSession.clockIn).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}
               </p>
+              <button className="link-btn" onClick={cancelShift} style={{ padding: 0 }}>
+                Ho sbagliato, annulla turno
+              </button>
             </div>
           </>
         ) : (
@@ -268,8 +334,8 @@ export default function Assistant({ workerName }) {
         )}
       </div>
 
-      {phase === 'idle' && (
-        <div className="assistant-actions">
+      {phase === 'idle' && !chatOpen && (
+        <div className="assistant-actions" style={{ flexDirection: 'column', gap: 14 }}>
           {!hasOpenSession && (
             <button className="btn btn-primary btn-round" onClick={() => startConversation('morning')}>
               🎙️ Inizia giornata
@@ -280,6 +346,47 @@ export default function Assistant({ workerName }) {
               🎙️ Fine giornata
             </button>
           )}
+          <button className="btn btn-secondary" onClick={openChat}>
+            💬 Chiedi qualcosa all'assistente
+          </button>
+        </div>
+      )}
+
+      {chatOpen && (
+        <div className="chat-card">
+          <div className="chat-messages">
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`chat-bubble ${m.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>
+                {m.content}
+              </div>
+            ))}
+            {chatBusy && <div className="chat-bubble chat-bubble-ai muted">Sto scrivendo...</div>}
+          </div>
+
+          {isListening && <p className="muted" style={{ textAlign: 'center' }}>🎙️ Ti ascolto... {interimTranscript && `"${interimTranscript}"`}</p>}
+          {micNotice && <p className="muted">🎤 {micNotice}</p>}
+
+          <form className="text-answer-form" onSubmit={submitChat}>
+            <input
+              type="text"
+              className="text-answer-input"
+              placeholder="Scrivi una domanda..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+            />
+            {isVoiceSupported() && (
+              <button type="button" className="btn btn-secondary btn-sm" onClick={listenForChat} disabled={chatBusy}>
+                🎙️
+              </button>
+            )}
+            <button className="btn btn-primary btn-sm" type="submit" disabled={!chatInput.trim() || chatBusy}>
+              Invia
+            </button>
+          </form>
+
+          <button className="btn btn-secondary" onClick={closeChat}>
+            Chiudi chat
+          </button>
         </div>
       )}
 

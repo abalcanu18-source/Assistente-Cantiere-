@@ -6,13 +6,25 @@ export default function History() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  function load() {
     api
       .myReports()
       .then(setReports)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function remove(id) {
+    if (!confirm('Eliminare questo rapportino? Non potrai più recuperarlo.')) return;
+    try {
+      await api.deleteReport(id);
+      load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   if (loading) return <p className="muted">Caricamento...</p>;
   if (error) return <div className="alert alert-error">{error}</div>;
@@ -30,9 +42,14 @@ export default function History() {
               <p className="muted">{r.jobsite?.name || 'Cantiere non specificato'}</p>
               <p className="report-summary">{r.summary}</p>
             </div>
-            <a className="btn btn-secondary btn-sm" href={api.reportPdfUrl(r.id)} target="_blank" rel="noreferrer">
-              PDF
-            </a>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <a className="btn btn-secondary btn-sm" href={api.reportPdfUrl(r.id)} target="_blank" rel="noreferrer">
+                PDF
+              </a>
+              <button className="btn btn-danger btn-sm" onClick={() => remove(r.id)}>
+                Elimina
+              </button>
+            </div>
           </div>
         ))}
       </div>

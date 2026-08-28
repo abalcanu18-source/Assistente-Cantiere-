@@ -103,6 +103,29 @@ Racconto dell'operaio a fine giornata: "${transcript}"`;
   return askJson(systemPrompt, userPrompt);
 }
 
+/**
+ * Free-form chat: lets the operator ask the assistant literally anything
+ * (not just the fixed morning/evening flow), the same way one would chat
+ * with any AI assistant. Keeps a short back-and-forth using the message
+ * history the frontend sends back each time (nothing persisted server-side).
+ */
+export async function chatReply({ workerName, history }) {
+  const systemPrompt = `Sei l'assistente vocale dell'app "Assistente Cantieri", che parla in italiano con ${workerName},
+un operaio edile. Sei disponibile, chiaro e diretto, e rispondi a QUALSIASI domanda ti venga fatta, anche non legata
+al lavoro (un po' come faresti in una normale chat con un assistente AI). Se ti chiedono di timbrare l'inizio o la
+fine della giornata, ricordagli di usare i pulsanti "Inizia giornata" / "Fine giornata" nella schermata principale
+dell'app, perché questa chat libera non registra automaticamente gli orari. Rispondi in modo breve e naturale
+(massimo 3-4 frasi), adatto a essere letto ad alta voce.`;
+
+  const completion = await getClient().chat.completions.create({
+    model: MODEL(),
+    temperature: 0.6,
+    messages: [{ role: 'system', content: systemPrompt }, ...history],
+  });
+
+  return completion.choices[0]?.message?.content?.trim() || 'Non ho capito, puoi ripetere?';
+}
+
 export function isOpenAiConfigured() {
   return Boolean(process.env.OPENAI_API_KEY);
 }

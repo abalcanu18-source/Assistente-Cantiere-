@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import db, { newId } from '../db.js';
 import { requireWorker } from '../middleware/auth.js';
-import { interpretMorning, interpretEvening, isOpenAiConfigured } from '../services/openai.js';
+import { interpretMorning, interpretEvening, chatReply, isOpenAiConfigured } from '../services/openai.js';
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
 import { sendReportEmail } from '../services/email.js';
 import { enrichSession, resolveJobsite, resolveVehicle, findOrCreateJobsite, findOrCreateVehicle } from '../services/sessionHelpers.js';
@@ -189,6 +189,35 @@ router.post('/end-day', requireWorker, async (req, res) => {
     emailError: emailResult.sent ? null : emailResult.error,
     emailPending: digestMode,
   });
+});
+
+// Free-form chat: "chiedi qualsiasi cosa all'IA", stateless on the server
+// (the frontend sends back the whole short conversation each time).
+router.post('/chat', requireWorker, async (req, res) => {
+  const { history } = req.body;
+  if (!Array.isArray(history) || history.length === 0) {
+    return res.status(400).json({ error: 'Nessun messaggio ricevuto.' });
+  }
+
+  const worker = db.data.workers.find((w) => w.id === req.workerId);
+  if (!worker) return res.status(404).json({ error: 'Operaio non trovato.' });
+
+  if (!isOpenAiConfigured()) {
+    return res.status(503).json({
+      error: 'L\'assistente AI non è configurato: manca OPENAI_API_KEY nel file .env del backend.',
+    });
+  }
+
+  const safeHistory = history
+    .filter((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
+    .slice(-20);
+
+  try {
+    const reply = await chatReply({ workerName: worker.name, history: safeHistory });
+    res.json({ reply });
+  } catch (err) {
+    res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
+  }
 });
 
 export default router;
