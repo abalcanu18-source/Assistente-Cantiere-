@@ -20,24 +20,31 @@ export function isStandalonePwa() {
 
 async function subscribeAndSave(publicKey) {
   const registration = await navigator.serviceWorker.ready;
-  let subscription = await registration.pushManager.getSubscription();
-
-  if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+  const existing = await registration.pushManager.getSubscription();
+  // Always drop the old subscription: if it was created with a different
+  // VAPID key, the server can "send" forever without the phone ever ringing.
+  if (existing) {
+    try {
+      await existing.unsubscribe();
+    } catch {
+      // ignore: we'll create a fresh one below
+    }
   }
 
-  await api.subscribePush(subscription.toJSON());
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey),
+  });
+
+  const json = subscription.toJSON();
+  if (!json?.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+    throw new Error('Il telefono non ha restituito una iscrizione valida. Riprova da Chrome.');
+  }
+
+  await api.subscribePush(json);
   return true;
 }
 
-/**
- * Asks the browser for notification permission and, if granted, subscribes
- * this device to push. Throws with an Italian message the UI can show —
- * silent failures were the reason operators thought "notifiche" did nothing.
- */
 export async function setupPushNotifications() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
     throw new Error(
@@ -65,7 +72,6 @@ export async function setupPushNotifications() {
   return true;
 }
 
-/** If the user already granted permission on a previous visit, re-save the subscription without prompting. */
 export async function restorePushIfGranted() {
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return false;

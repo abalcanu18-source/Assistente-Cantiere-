@@ -126,8 +126,13 @@ export default function Assistant({ workerName }) {
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
     const handler = (event) => {
-      if (event.data?.type === 'alarm-tapped') {
-        triggerAlarm(event.data.alarmType === 'evening' ? 'evening' : 'morning');
+      if (event.data?.type === 'alarm-tapped' || event.data?.type === 'push-received') {
+        const kind = event.data.alarmType;
+        if (kind === 'test' || kind === 'generic') {
+          triggerAlarm('test');
+        } else {
+          triggerAlarm(kind === 'evening' ? 'evening' : 'morning');
+        }
       }
     };
     navigator.serviceWorker.addEventListener('message', handler);
@@ -146,14 +151,33 @@ export default function Assistant({ workerName }) {
     try {
       await setupPushNotifications();
       setPushEnabled(true);
-      try {
-        await api.testPush();
-        setPushOk('Notifiche attive. Ti ho mandato una prova: dovresti vederla ora.');
-      } catch {
-        setPushOk('Iscrizione ok. Se la prova non arriva, riapri l\'app dalla icona sulla Home.');
-      }
+      await sendTestNotification();
     } catch (err) {
       setPushEnabled(false);
+      setPushError(err.message);
+    }
+  }
+
+  async function sendTestNotification() {
+    setPushError('');
+    setPushOk('');
+    // Always ring inside the app: Android often hides the tray banner
+    // while you're looking at the screen, which looked like "nothing arrived".
+    triggerAlarm('test');
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Prova sveglia 🔔', {
+          body: 'Se vedi anche questo, il telefono ha accettato le notifiche.',
+          tag: `cantieri-test-${Date.now()}`,
+        });
+      }
+    } catch {
+      // some browsers block the Notification constructor from a PWA tab
+    }
+    try {
+      await api.testPush();
+      setPushOk('Prova inviata. Devi sentire il suono e vedere lo schermo arancione. Se l\'app è chiusa, arriva come notifica.');
+    } catch (err) {
       setPushError(err.message);
     }
   }
@@ -361,14 +385,24 @@ export default function Assistant({ workerName }) {
       {alarmActive && (
         <div className="alarm-overlay">
           <div className="alarm-pulse">🔔</div>
-          <h2>{alarmActive === 'morning' ? 'Buongiorno!' : 'Fine giornata!'}</h2>
+          <h2>
+            {alarmActive === 'morning' ? 'Buongiorno!' : alarmActive === 'evening' ? 'Fine giornata!' : 'Prova sveglia'}
+          </h2>
           <p>
             {alarmActive === 'morning'
-              ? "È ora di iniziare la giornata di lavoro."
-              : 'È ora di raccontare cosa hai fatto oggi.'}
+              ? 'È ora di iniziare la giornata di lavoro.'
+              : alarmActive === 'evening'
+                ? 'È ora di raccontare cosa hai fatto oggi.'
+                : 'Se vedi questa schermata e senti il suono, sul telefono le sveglie funzionano.'}
           </p>
-          <button className="btn btn-primary btn-lg" onClick={dismissAlarmAndStart}>
-            Rispondi
+          <button
+            className="btn btn-primary btn-lg"
+            onClick={() => {
+              if (alarmActive === 'test') setAlarmActive(null);
+              else dismissAlarmAndStart();
+            }}
+          >
+            {alarmActive === 'test' ? 'Ok, l\'ho visto' : 'Rispondi'}
           </button>
         </div>
       )}
@@ -392,8 +426,12 @@ export default function Assistant({ workerName }) {
       )}
       {pushEnabled && (
         <div className="card push-card">
-          <p>🔔 Sveglie attive su questo telefono.</p>
+          <p>🔔 Sveglie attive su questo telefono. Tocca il pulsante per una prova: deve suonare e apparire uno schermo arancione.</p>
+          <button className="btn btn-secondary" onClick={sendTestNotification}>
+            Prova sveglia ora
+          </button>
           {pushOk && <div className="alert alert-success">{pushOk}</div>}
+          {pushError && <div className="alert alert-error">{pushError}</div>}
         </div>
       )}
 

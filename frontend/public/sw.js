@@ -1,6 +1,7 @@
-// Service worker: keeps the app installable as a PWA and receives push
-// notifications even when the app itself isn't open, which is what makes
-// the 6:30 / 17:00 "alarm" actually work on a phone.
+// Service worker v2: keeps the app installable as a PWA and receives push
+// notifications even when the app itself isn't open. Also tells any open
+// tab about the push, because Android often hides the tray banner while
+// you're looking at the app.
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -15,7 +16,11 @@ self.addEventListener('push', (event) => {
   try {
     if (event.data) data = { ...data, ...event.data.json() };
   } catch {
-    // ignore malformed payloads, fall back to defaults above
+    try {
+      if (event.data) data = { ...data, body: event.data.text() };
+    } catch {
+      // fall back to defaults above
+    }
   }
 
   const options = {
@@ -24,22 +29,32 @@ self.addEventListener('push', (event) => {
     badge: '/icons/icon-192.png',
     vibrate: [400, 200, 400, 200, 400],
     requireInteraction: true,
+    silent: false,
     data: { type: data.type, url: '/' },
-    tag: 'cantieri-alarm',
+    tag: data.type === 'test' ? `cantieri-test-${Date.now()}` : 'cantieri-alarm',
   };
 
-  event.waitUntil(self.registration.showNotification(data.title, options));
+  event.waitUntil(
+    (async () => {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clients) {
+        client.postMessage({ type: 'push-received', alarmType: data.type, title: data.title, body: data.body });
+      }
+      await self.registration.showNotification(data.title, options);
+    })()
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const targetUrl = event.notification.data?.url || '/';
+  const alarmType = event.notification.data?.type;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          client.postMessage({ type: 'alarm-tapped', alarmType: event.notification.data?.type });
+          client.postMessage({ type: 'alarm-tapped', alarmType });
           return client.focus();
         }
       }
