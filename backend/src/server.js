@@ -42,11 +42,12 @@ app.use(
     },
   })
 );
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '8mb' }));
 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
+    timezone: process.env.TZ || 'Europe/Rome',
     openAiConfigured: isOpenAiConfigured(),
     emailConfigured: isEmailConfigured(),
     pushConfigured: isPushConfigured(),

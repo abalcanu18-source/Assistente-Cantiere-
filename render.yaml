@@ -57,6 +57,8 @@ services:
       # indirizzo reale (es. https://cantieri-frontend-xxxx.onrender.com)
       - key: FRONTEND_ORIGIN
         sync: false
+      - key: TZ
+        value: Europe/Rome
 
   - type: web
     name: cantieri-frontend

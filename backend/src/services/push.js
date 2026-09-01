@@ -49,6 +49,8 @@ export async function notifyWorker(workerId, payload) {
       } catch (err) {
         if (err.statusCode === 404 || err.statusCode === 410) {
           stale.push(s.subscription.endpoint);
+        } else {
+          console.warn(`[push] invio fallito (${err.statusCode || 'n/d'}): ${err.message}`);
         }
       }
     })

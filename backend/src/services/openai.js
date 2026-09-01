@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 
 let client = null;
 
@@ -124,6 +124,21 @@ dell'app, perché questa chat libera non registra automaticamente gli orari. Ris
   });
 
   return completion.choices[0]?.message?.content?.trim() || 'Non ho capito, puoi ripetere?';
+}
+
+/**
+ * Turns a short spoken recording (webm/mp4 from the phone) into Italian
+ * text. Used when the browser's built-in SpeechRecognition is missing
+ * (typical on iPhone) so the operator can still talk instead of typing.
+ */
+export async function transcribeAudio(buffer, filename = 'audio.webm') {
+  const file = await toFile(buffer, filename);
+  const result = await getClient().audio.transcriptions.create({
+    model: 'whisper-1',
+    file,
+    language: 'it',
+  });
+  return result.text?.trim() || '';
 }
 
 export function isOpenAiConfigured() {

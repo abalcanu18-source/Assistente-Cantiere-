@@ -1,16 +1,45 @@
 import { useCallback, useRef, useState } from 'react';
+import { isIosDevice } from './push.js';
 
 const SpeechRecognitionImpl =
   typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
 
 export function isVoiceSupported() {
-  return Boolean(SpeechRecognitionImpl) && 'speechSynthesis' in window;
+  return Boolean(SpeechRecognitionImpl) || canRecordAudio();
+}
+
+export function canRecordAudio() {
+  return typeof navigator !== 'undefined'
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+    && typeof MediaRecorder !== 'undefined';
+}
+
+/** Chrome/Edge on Android and desktop: live speech-to-text. iPhone almost never supports it. */
+export function isBrowserSpeechReliable() {
+  return Boolean(SpeechRecognitionImpl) && !isIosDevice();
+}
+
+export function pickRecorderMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/mpeg'];
+  return types.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+export function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 const VOICE_PREF_KEY = 'assistantVoiceName';
 
-// Voices are only reliably available after the browser fires
-// 'voiceschanged' at least once (varies a lot by device/browser).
 export function getAvailableVoices() {
   if (!('speechSynthesis' in window)) return [];
   const all = window.speechSynthesis.getVoices();
@@ -36,23 +65,20 @@ export function saveVoiceName(name) {
   else localStorage.removeItem(VOICE_PREF_KEY);
 }
 
-/**
- * Thin wrapper around the browser's built-in speech APIs: SpeechRecognition
- * for listening (free, on-device/near-realtime, no server upload needed)
- * and SpeechSynthesis for the assistant's spoken replies. Keeping this
- * logic in one hook means the Assistant screen can just call listen()/speak()
- * without worrying about browser quirks.
- */
 export function useVoice() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
   const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const streamRef = useRef(null);
 
   const listen = useCallback(() => {
     return new Promise((resolve, reject) => {
       if (!SpeechRecognitionImpl) {
-        reject(new Error('Il riconoscimento vocale non è supportato su questo browser. Prova con Chrome.'));
+        reject(new Error('Il riconoscimento vocale non è supportato su questo browser.'));
         return;
       }
 
@@ -100,6 +126,43 @@ export function useVoice() {
     recognitionRef.current?.stop();
   }, []);
 
+  const startRecording = useCallback(async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+    const mimeType = pickRecorderMime();
+    const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    chunksRef.current = [];
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunksRef.current.push(e.data);
+    };
+    mediaRecorderRef.current = rec;
+    rec.start();
+    setIsRecording(true);
+    setIsListening(true);
+    return rec.mimeType || mimeType || 'audio/webm';
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    return new Promise((resolve, reject) => {
+      const rec = mediaRecorderRef.current;
+      if (!rec || rec.state === 'inactive') {
+        setIsRecording(false);
+        setIsListening(false);
+        reject(new Error('Registrazione non attiva.'));
+        return;
+      }
+      rec.onstop = () => {
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        setIsRecording(false);
+        setIsListening(false);
+        const type = rec.mimeType || pickRecorderMime() || 'audio/webm';
+        resolve({ blob: new Blob(chunksRef.current, { type }), mimeType: type });
+      };
+      rec.stop();
+    });
+  }, []);
+
   const speak = useCallback((text) => {
     return new Promise((resolve) => {
       if (!('speechSynthesis' in window) || !text) {
@@ -130,5 +193,15 @@ export function useVoice() {
     });
   }, []);
 
-  return { listen, stopListening, speak, isListening, isSpeaking, interimTranscript };
+  return {
+    listen,
+    stopListening,
+    startRecording,
+    stopRecording,
+    speak,
+    isListening,
+    isSpeaking,
+    isRecording,
+    interimTranscript,
+  };
 }

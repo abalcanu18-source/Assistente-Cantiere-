@@ -1,16 +1,13 @@
 import { Router } from 'express';
 import db, { newId } from '../db.js';
 import { requireWorker } from '../middleware/auth.js';
-import { interpretMorning, interpretEvening, chatReply, isOpenAiConfigured } from '../services/openai.js';
+import { interpretMorning, interpretEvening, chatReply, transcribeAudio, isOpenAiConfigured } from '../services/openai.js';
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
 import { sendReportEmail } from '../services/email.js';
 import { enrichSession, resolveJobsite, resolveVehicle, findOrCreateJobsite, findOrCreateVehicle } from '../services/sessionHelpers.js';
+import { todayKey } from '../services/time.js';
 
 const router = Router();
-
-function todayKey(date = new Date()) {
-  return date.toISOString().slice(0, 10); // YYYY-MM-DD, local-enough for a daily report
-}
 
 function findOpenSession(workerId) {
   return db.data.sessions.find(
@@ -217,6 +214,31 @@ router.post('/chat', requireWorker, async (req, res) => {
     res.json({ reply });
   } catch (err) {
     res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
+  }
+});
+
+router.post('/transcribe', requireWorker, async (req, res) => {
+  const { audioBase64, mimeType } = req.body;
+  if (!audioBase64 || typeof audioBase64 !== 'string') {
+    return res.status(400).json({ error: 'Nessun audio ricevuto.' });
+  }
+
+  if (!isOpenAiConfigured()) {
+    return res.status(503).json({
+      error: 'L\'assistente AI non è configurato: manca OPENAI_API_KEY nel file .env del backend.',
+    });
+  }
+
+  const filename = mimeType && mimeType.includes('mp4') ? 'audio.mp4' : 'audio.webm';
+  try {
+    const buffer = Buffer.from(audioBase64, 'base64');
+    if (buffer.length < 200) {
+      return res.status(400).json({ error: 'Registrazione troppo corta. Tieni premuto e parla, poi tocca di nuovo.' });
+    }
+    const text = await transcribeAudio(buffer, filename);
+    res.json({ text });
+  } catch (err) {
+    res.status(502).json({ error: `Non sono riuscito a capire l'audio: ${err.message}` });
   }
 });
 

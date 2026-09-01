@@ -55,6 +55,8 @@ export const api = {
   startDay: (transcript) => request('/api/voice/start-day', { method: 'POST', body: { transcript } }),
   endDay: (transcript) => request('/api/voice/end-day', { method: 'POST', body: { transcript } }),
   chat: (history) => request('/api/voice/chat', { method: 'POST', body: { history } }),
+  transcribe: (audioBase64, mimeType) =>
+    request('/api/voice/transcribe', { method: 'POST', body: { audioBase64, mimeType } }),
 
   // Reports
   myReports: () => request('/api/reports/mine'),
@@ -92,6 +94,7 @@ export const api = {
   // Push
   getPushPublicKey: () => request('/api/push/public-key', { auth: 'none' }),
   subscribePush: (subscription) => request('/api/push/subscribe', { method: 'POST', body: { subscription } }),
+  testPush: () => request('/api/push/test', { method: 'POST', body: {} }),
 };
 
 export function saveWorkerSession(token) {

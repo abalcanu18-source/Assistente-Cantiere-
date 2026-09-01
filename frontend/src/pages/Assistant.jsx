@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { isVoiceSupported, useVoice, getAvailableVoices, onVoicesReady, getSavedVoiceName, saveVoiceName } from '../useVoice.js';
-import { setupPushNotifications } from '../push.js';
+import { isVoiceSupported, useVoice, getAvailableVoices, onVoicesReady, getSavedVoiceName, saveVoiceName, isBrowserSpeechReliable, canRecordAudio, blobToBase64 } from '../useVoice.js';
+import { setupPushNotifications, restorePushIfGranted, isIosDevice, isStandalonePwa } from '../push.js';
 import { playAlarmBeeps } from '../beep.js';
 
 function isNowNear(hhmm, windowMinutes = 5) {
@@ -34,7 +34,7 @@ function isWithinWorkWindow(settings) {
 }
 
 export default function Assistant({ workerName }) {
-  const { listen, speak, isListening, interimTranscript } = useVoice();
+  const { listen, speak, startRecording, stopRecording, isListening, isRecording, interimTranscript } = useVoice();
 
   const [status, setStatus] = useState(null); // { openSession, lastCompletedSession }
   const [settings, setSettings] = useState({});
@@ -46,6 +46,8 @@ export default function Assistant({ workerName }) {
   const [typedAnswer, setTypedAnswer] = useState('');
   const [alarmActive, setAlarmActive] = useState(null); // 'morning' | 'evening' | null
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushError, setPushError] = useState('');
+  const [pushOk, setPushOk] = useState('');
   const [lastResult, setLastResult] = useState(null);
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState(getSavedVoiceName());
@@ -77,6 +79,9 @@ export default function Assistant({ workerName }) {
   useEffect(() => {
     refreshStatus();
     api.getSettings().then(setSettings).catch(() => {});
+    restorePushIfGranted().then((ok) => {
+      if (ok) setPushEnabled(true);
+    });
   }, [refreshStatus]);
 
   // Foreground fallback "alarm": works even without push permission, as
@@ -136,8 +141,21 @@ export default function Assistant({ workerName }) {
   }
 
   async function enablePush() {
-    const ok = await setupPushNotifications();
-    setPushEnabled(ok);
+    setPushError('');
+    setPushOk('');
+    try {
+      await setupPushNotifications();
+      setPushEnabled(true);
+      try {
+        await api.testPush();
+        setPushOk('Notifiche attive. Ti ho mandato una prova: dovresti vederla ora.');
+      } catch {
+        setPushOk('Iscrizione ok. Se la prova non arriva, riapri l\'app dalla icona sulla Home.');
+      }
+    } catch (err) {
+      setPushEnabled(false);
+      setPushError(err.message);
+    }
   }
 
   async function dismissAlarmAndStart() {
@@ -172,29 +190,59 @@ export default function Assistant({ workerName }) {
 
     setAssistantMessage(greeting);
     await speak(greeting);
-    enterAwaitingAnswer(type);
+    setPhase('listening');
   }
 
-  // Shows the "answer me" state (mic + text input) and, if a microphone is
-  // available, tries to start listening automatically in the background.
-  // A missing/denied microphone never blocks the flow: the operator can
-  // always just type the answer instead.
-  function enterAwaitingAnswer(type) {
+  // The operator must tap "Parla" (a real tap) so iPhone/Android grant the
+  // microphone. Starting listen() automatically after TTS always fails on
+  // iOS and often on Android because the original tap is already "used up".
+  async function tapToTalk() {
+    setMicNotice('');
+    if (isRecording) {
+      setPhase('thinking');
+      try {
+        const { blob, mimeType } = await stopRecording();
+        const audioBase64 = await blobToBase64(blob);
+        const { text } = await api.transcribe(audioBase64, mimeType);
+        if (text && text.trim()) {
+          await processAnswer(conversationType, text.trim());
+        } else {
+          setMicNotice('Non ho capito, tocca di nuovo e parla più vicino al telefono.');
+          setPhase('listening');
+        }
+      } catch (err) {
+        setMicNotice(err.message);
+        setPhase('listening');
+      }
+      return;
+    }
+
+    if (isBrowserSpeechReliable()) {
+      listen()
+        .then((transcript) => {
+          if (transcript && transcript.trim()) processAnswer(conversationType, transcript.trim());
+        })
+        .catch((err) => {
+          setMicNotice(`${err.message} Prova a toccare di nuovo "Parla", o scrivi qui sotto.`);
+        });
+      return;
+    }
+
+    if (!canRecordAudio()) {
+      setMicNotice('Questo telefono non permette il microfono nel browser. Scrivi la risposta qui sotto.');
+      return;
+    }
+
+    try {
+      await startRecording();
+    } catch (err) {
+      setMicNotice('Consenti il microfono dalle impostazioni del telefono, poi tocca di nuovo Parla.');
+    }
+  }
+
+  function enterAwaitingAnswer() {
     setPhase('listening');
     setMicNotice('');
-    if (!isVoiceSupported()) return;
-
-    listen()
-      .then((transcript) => {
-        if (transcript && transcript.trim()) {
-          processAnswer(type, transcript.trim());
-        }
-      })
-      .catch((err) => {
-        setMicNotice(
-          `Microfono non disponibile (${err.message}). Scrivi la risposta qui sotto.`
-        );
-      });
   }
 
   function submitTypedAnswer(e) {
@@ -270,12 +318,29 @@ export default function Assistant({ workerName }) {
   }
 
   function listenForChat() {
-    if (!isVoiceSupported()) return;
-    listen()
-      .then((transcript) => {
-        if (transcript && transcript.trim()) sendChat(transcript.trim());
-      })
-      .catch((err) => setMicNotice(`Microfono non disponibile (${err.message}).`));
+    if (isRecording || chatBusy) return;
+    if (isBrowserSpeechReliable()) {
+      listen()
+        .then((transcript) => {
+          if (transcript && transcript.trim()) sendChat(transcript.trim());
+        })
+        .catch((err) => setMicNotice(err.message));
+      return;
+    }
+    startRecording().catch((err) => setMicNotice(err.message));
+  }
+
+  async function stopChatRecording() {
+    if (!isRecording) return;
+    try {
+      const { blob, mimeType } = await stopRecording();
+      const audioBase64 = await blobToBase64(blob);
+      const { text } = await api.transcribe(audioBase64, mimeType);
+      if (text && text.trim()) await sendChat(text.trim());
+      else setMicNotice('Non ho capito, riprova.');
+    } catch (err) {
+      setMicNotice(err.message);
+    }
   }
 
   function reset() {
@@ -310,10 +375,25 @@ export default function Assistant({ workerName }) {
 
       {!pushEnabled && (
         <div className="card push-card">
-          <p>🔔 Attiva la sveglia automatica su questo telefono (avvisa anche ad app chiusa).</p>
+          {isIosDevice() && !isStandalonePwa() && (
+            <p>
+              Su iPhone: apri questa pagina in <strong>Safari</strong>, tocca Condividi → <strong>Aggiungi a Home</strong>,
+              poi apri l'icona e attiva le notifiche da lì. Altrimenti la sveglia non arriva.
+            </p>
+          )}
+          {!(isIosDevice() && !isStandalonePwa()) && (
+            <p>🔔 Attiva la sveglia automatica su questo telefono (avvisa anche ad app chiusa).</p>
+          )}
           <button className="btn btn-secondary" onClick={enablePush}>
             Attiva notifiche
           </button>
+          {pushError && <div className="alert alert-error">{pushError}</div>}
+        </div>
+      )}
+      {pushEnabled && (
+        <div className="card push-card">
+          <p>🔔 Sveglie attive su questo telefono.</p>
+          {pushOk && <div className="alert alert-success">{pushOk}</div>}
         </div>
       )}
 
@@ -415,8 +495,13 @@ export default function Assistant({ workerName }) {
               onChange={(e) => setChatInput(e.target.value)}
             />
             {isVoiceSupported() && (
-              <button type="button" className="btn btn-secondary btn-sm" onClick={listenForChat} disabled={chatBusy}>
-                🎙️
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={isRecording ? stopChatRecording : listenForChat}
+                disabled={chatBusy}
+              >
+                {isRecording ? 'Invia' : '🎙️'}
               </button>
             )}
             <button className="btn btn-primary btn-sm" type="submit" disabled={!chatInput.trim() || chatBusy}>
@@ -436,14 +521,24 @@ export default function Assistant({ workerName }) {
 
           {phase === 'listening' && (
             <div className="listening-box">
-              {isListening && (
+              {(isListening || isRecording) && (
                 <>
                   <div className="mic-pulse">🎙️</div>
-                  <p className="muted">Ti ascolto... parla pure</p>
+                  <p className="muted">{isRecording ? 'Ti ascolto... tocca di nuovo per inviare' : 'Ti ascolto... parla pure'}</p>
                   {interimTranscript && <p className="transcript-preview">"{interimTranscript}"</p>}
                 </>
               )}
               {micNotice && <p className="muted">🎤 {micNotice}</p>}
+
+              {!isListening && !isRecording && (
+                <p className="muted">Tocca il pulsante e parla, poi tocca di nuovo per inviare.</p>
+              )}
+
+              {isVoiceSupported() && (
+                <button className="btn btn-primary btn-round" type="button" onClick={tapToTalk}>
+                  {isRecording ? 'Invia voce' : '🎙️ Parla'}
+                </button>
+              )}
 
               <form className="text-answer-form" onSubmit={submitTypedAnswer}>
                 <input
@@ -466,7 +561,7 @@ export default function Assistant({ workerName }) {
           {phase === 'error' && (
             <>
               <div className="alert alert-error">{errorMessage}</div>
-              <button className="btn btn-secondary" onClick={() => enterAwaitingAnswer(conversationType)}>
+              <button className="btn btn-secondary" onClick={() => enterAwaitingAnswer()}>
                 Riprova
               </button>
             </>
