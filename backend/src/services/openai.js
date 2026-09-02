@@ -109,21 +109,59 @@ Racconto dell'operaio a fine giornata: "${transcript}"`;
  * with any AI assistant. Keeps a short back-and-forth using the message
  * history the frontend sends back each time (nothing persisted server-side).
  */
-export async function chatReply({ workerName, history }) {
-  const systemPrompt = `Sei l'assistente vocale dell'app "Assistente Cantieri", che parla in italiano con ${workerName},
-un operaio edile. Sei disponibile, chiaro e diretto, e rispondi a QUALSIASI domanda ti venga fatta, anche non legata
-al lavoro (un po' come faresti in una normale chat con un assistente AI). Se ti chiedono di timbrare l'inizio o la
-fine della giornata, ricordagli di usare i pulsanti "Inizia giornata" / "Fine giornata" nella schermata principale
-dell'app, perché questa chat libera non registra automaticamente gli orari. Rispondi in modo breve e naturale
-(massimo 3-4 frasi), adatto a essere letto ad alta voce.`;
+/**
+ * Conversational assistant: can both chat freely AND compile the daily
+ * PDF report from what the operator says, like talking to a colleague.
+ */
+export async function chatReply({ workerName, history, context = {} }) {
+  const systemPrompt = `Sei l'assistente vocale dell'app "Assistente Cantieri". Parli in italiano con ${workerName}, un operaio edile.
+Puoi rispondere a qualsiasi domanda, e puoi anche COMPILARE il rapportino PDF ascoltando quello che racconta.
+
+Contesto turno di oggi:
+- Turno già aperto: ${context.hasOpenSession ? 'sì' : 'no'}
+- Cantiere già registrato: ${context.jobsiteName || 'nessuno'}
+- Mezzo già registrato: ${context.vehicleName || 'nessuno'}
+- Inizio turno: ${context.clockIn || 'non ancora'}
+
+Regole per il rapportino:
+- Se l'operaio dice dove è andato / sta andando e NON ha un turno aperto, prepara startDay=true e jobsiteName.
+- Se racconta cosa ha fatto nella giornata (o chiede di compilare/chiudere il rapportino) e hai un riassunto delle attività, metti endDay=true e summary (1-4 frasi professionali, senza inventare).
+- Se manca il cantiere o manca cosa ha fatto, NON chiudere: chiedilo nella reply.
+- Se ha già il turno aperto e dice solo il lavoro svolto, endDay=true basta (jobsite già noto).
+- Non chiudere MAI il rapportino se ha solo chiesto una cosa generica (orario, barzelletta, come funziona l'app).
+
+Rispondi SEMPRE in JSON:
+{
+  "reply": "<frase da dire a voce, massimo 4 frasi>",
+  "startDay": true/false,
+  "endDay": true/false,
+  "jobsiteName": "<nome cantiere o null>",
+  "vehicleName": "<mezzo o null>",
+  "summary": "<riassunto professionale per il PDF, o null>"
+}`;
 
   const completion = await getClient().chat.completions.create({
     model: MODEL(),
-    temperature: 0.6,
+    response_format: { type: 'json_object' },
+    temperature: 0.4,
     messages: [{ role: 'system', content: systemPrompt }, ...history],
   });
 
-  return completion.choices[0]?.message?.content?.trim() || 'Non ho capito, puoi ripetere?';
+  const raw = completion.choices[0]?.message?.content || '{}';
+  let parsed = {};
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = { reply: raw };
+  }
+  return {
+    reply: (parsed.reply || 'Non ho capito, puoi ripetere?').trim(),
+    startDay: Boolean(parsed.startDay),
+    endDay: Boolean(parsed.endDay),
+    jobsiteName: parsed.jobsiteName || null,
+    vehicleName: parsed.vehicleName || null,
+    summary: parsed.summary || null,
+  };
 }
 
 /**

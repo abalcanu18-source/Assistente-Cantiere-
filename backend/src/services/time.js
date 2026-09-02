@@ -38,4 +38,15 @@ export function hhmmToMinutes(hhmm) {
   return h * 60 + m;
 }
 
+/** Convert a Rome calendar date + clock time to a real UTC ISO string. */
+export function romeLocalToUtcIso(dateKey, hhmm) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const [h, m] = (hhmm || '07:00').split(':').map(Number);
+  const wantMin = h * 60 + m;
+  let utc = Date.UTC(year, month - 1, day, h, m, 0);
+  const shown = getRomeClock(new Date(utc));
+  utc -= (shown.minutes - wantMin) * 60000;
+  return new Date(utc).toISOString();
+}
+
 export { TIMEZONE };

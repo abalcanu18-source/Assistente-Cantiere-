@@ -5,7 +5,7 @@ import { interpretMorning, interpretEvening, chatReply, transcribeAudio, isOpenA
 import { generateReportPdfBuffer, reportFileName } from '../services/pdf.js';
 import { sendReportEmail } from '../services/email.js';
 import { enrichSession, resolveJobsite, resolveVehicle, findOrCreateJobsite, findOrCreateVehicle } from '../services/sessionHelpers.js';
-import { todayKey } from '../services/time.js';
+import { todayKey, romeLocalToUtcIso } from '../services/time.js';
 
 const router = Router();
 
@@ -13,6 +13,93 @@ function findOpenSession(workerId) {
   return db.data.sessions.find(
     (s) => s.workerId === workerId && s.date === todayKey() && s.status === 'in_corso'
   );
+}
+
+function applyJobsiteAndVehicle(session, jobsiteName, vehicleName) {
+  if (jobsiteName) {
+    const jobsite = findOrCreateJobsite(jobsiteName);
+    if (jobsite) {
+      session.jobsiteId = jobsite.id;
+      session.jobsiteName = jobsite.name;
+    }
+  }
+  if (vehicleName) {
+    const vehicle = findOrCreateVehicle(vehicleName);
+    if (vehicle) {
+      session.vehicleId = vehicle.id;
+      session.vehicleName = vehicle.name;
+    }
+  }
+}
+
+function ensureOpenSession(worker, { jobsiteName, vehicleName, transcript }) {
+  let session = findOpenSession(worker.id);
+  if (session) {
+    applyJobsiteAndVehicle(session, jobsiteName, vehicleName);
+    if (transcript) {
+      session.morningTranscript = session.morningTranscript
+        ? `${session.morningTranscript}\n${transcript}`
+        : transcript;
+    }
+    return session;
+  }
+
+  const jobsite = jobsiteName ? findOrCreateJobsite(jobsiteName) : null;
+  const vehicle = vehicleName ? findOrCreateVehicle(vehicleName) : null;
+  const workStart = db.data.settings.workDayStart || '07:00';
+  session = {
+    id: newId(),
+    workerId: worker.id,
+    date: todayKey(),
+    jobsiteId: jobsite ? jobsite.id : null,
+    jobsiteName: jobsiteName || null,
+    vehicleId: vehicle ? vehicle.id : null,
+    vehicleName: vehicleName || null,
+    clockIn: romeLocalToUtcIso(todayKey(), workStart),
+    clockOut: null,
+    morningTranscript: transcript || null,
+    eveningTranscript: null,
+    summary: null,
+    status: 'in_corso',
+    emailSent: false,
+  };
+  db.data.sessions.push(session);
+  return session;
+}
+
+async function closeSessionWithSummary(session, worker, { summary, transcript }) {
+  session.clockOut = new Date().toISOString();
+  session.eveningTranscript = transcript || session.eveningTranscript;
+  session.summary = summary || transcript || session.summary;
+  session.status = 'completato';
+
+  const jobsite = resolveJobsite(session);
+  const vehicle = resolveVehicle(session);
+  const digestMode = (db.data.settings.emailMode || 'digest') !== 'immediate';
+
+  let emailResult = { sent: false, error: null };
+  if (digestMode) {
+    session.emailSent = false;
+  } else {
+    const pdfBuffer = await generateReportPdfBuffer({
+      session,
+      worker,
+      vehicle,
+      jobsite,
+      companyName: db.data.settings.companyName,
+    });
+    emailResult = await sendReportEmail({
+      pdfBuffer,
+      fileName: reportFileName(worker, session),
+      worker,
+      session,
+      toOverride: db.data.settings.secretaryEmail,
+    });
+    session.emailSent = emailResult.sent;
+  }
+
+  await db.write();
+  return { emailResult, digestMode };
 }
 
 // Lets the frontend know, on load, whether this worker already has an
@@ -209,9 +296,73 @@ router.post('/chat', requireWorker, async (req, res) => {
     .filter((m) => m && typeof m.content === 'string' && (m.role === 'user' || m.role === 'assistant'))
     .slice(-20);
 
+  let open = findOpenSession(req.workerId);
+
   try {
-    const reply = await chatReply({ workerName: worker.name, history: safeHistory });
-    res.json({ reply });
+    const interpretation = await chatReply({
+      workerName: worker.name,
+      history: safeHistory,
+      context: {
+        hasOpenSession: Boolean(open),
+        jobsiteName: resolveJobsite(open)?.name || open?.jobsiteName || null,
+        vehicleName: resolveVehicle(open)?.name || open?.vehicleName || null,
+        clockIn: open?.clockIn || null,
+      },
+    });
+
+    const lastUser = [...safeHistory].reverse().find((m) => m.role === 'user');
+    const lastUserText = lastUser?.content || '';
+
+    let compiled = false;
+    let pdfDownloadUrl = null;
+    let emailSent = false;
+    let emailError = null;
+    let emailPending = false;
+    let session = open ? enrichSession(open) : null;
+
+    if (interpretation.startDay && !open) {
+      const created = ensureOpenSession(worker, {
+        jobsiteName: interpretation.jobsiteName,
+        vehicleName: interpretation.vehicleName,
+        transcript: lastUserText,
+      });
+      await db.write();
+      session = enrichSession(created);
+      open = created;
+    } else if (open && (interpretation.jobsiteName || interpretation.vehicleName)) {
+      applyJobsiteAndVehicle(open, interpretation.jobsiteName, interpretation.vehicleName);
+      await db.write();
+      session = enrichSession(open);
+    }
+
+    if (interpretation.endDay && (interpretation.summary || lastUserText)) {
+      const toClose = open || ensureOpenSession(worker, {
+        jobsiteName: interpretation.jobsiteName,
+        vehicleName: interpretation.vehicleName,
+        transcript: lastUserText,
+      });
+      applyJobsiteAndVehicle(toClose, interpretation.jobsiteName, interpretation.vehicleName);
+      const { emailResult, digestMode } = await closeSessionWithSummary(toClose, worker, {
+        summary: interpretation.summary,
+        transcript: lastUserText,
+      });
+      compiled = true;
+      session = enrichSession(toClose);
+      pdfDownloadUrl = `/api/reports/${toClose.id}/pdf`;
+      emailSent = emailResult.sent;
+      emailError = emailResult.sent ? null : emailResult.error;
+      emailPending = digestMode;
+    }
+
+    res.json({
+      reply: interpretation.reply,
+      compiled,
+      session,
+      pdfDownloadUrl,
+      emailSent,
+      emailError,
+      emailPending,
+    });
   } catch (err) {
     res.status(502).json({ error: `Errore nel contattare l'assistente AI: ${err.message}` });
   }

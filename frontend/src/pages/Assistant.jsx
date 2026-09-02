@@ -307,7 +307,7 @@ export default function Assistant({ workerName }) {
   function openChat() {
     setChatOpen(true);
     setChatInput('');
-    const greeting = `Ciao ${workerName}, dimmi pure, chiedimi quello che vuoi.`;
+    const greeting = `Ciao ${workerName}, racconta la giornata (cantiere, mezzo, cosa hai fatto) e ti compilo il rapportino, oppure chiedimi quello che vuoi.`;
     setChatMessages([{ role: 'assistant', content: greeting }]);
     speak(greeting);
   }
@@ -326,9 +326,18 @@ export default function Assistant({ workerName }) {
     setChatInput('');
     setChatBusy(true);
     try {
-      const { reply } = await api.chat(withUser);
-      setChatMessages([...withUser, { role: 'assistant', content: reply }]);
-      await speak(reply);
+      const result = await api.chat(withUser);
+      const next = [...withUser, { role: 'assistant', content: result.reply }];
+      if (result.compiled && result.pdfDownloadUrl) {
+        next.push({
+          role: 'assistant',
+          content: 'Rapportino compilato. Tocca per aprire il PDF.',
+          pdfUrl: `${api.API_URL}${result.pdfDownloadUrl}?token=${localStorage.getItem('workerToken') || ''}`,
+        });
+        refreshStatus();
+      }
+      setChatMessages(next);
+      await speak(result.reply);
     } catch (err) {
       setChatMessages([...withUser, { role: 'assistant', content: `⚠️ ${err.message}` }]);
     } finally {
@@ -505,7 +514,7 @@ export default function Assistant({ workerName }) {
             </button>
           )}
           <button className="btn btn-secondary" onClick={openChat}>
-            💬 Chiedi qualcosa all'assistente
+            💬 Parla e compila il rapportino
           </button>
         </div>
       )}
@@ -516,6 +525,14 @@ export default function Assistant({ workerName }) {
             {chatMessages.map((m, i) => (
               <div key={i} className={`chat-bubble ${m.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'}`}>
                 {m.content}
+                {m.pdfUrl && (
+                  <>
+                    {' '}
+                    <a className="link-btn" href={m.pdfUrl} target="_blank" rel="noreferrer">
+                      Apri PDF
+                    </a>
+                  </>
+                )}
               </div>
             ))}
             {chatBusy && <div className="chat-bubble chat-bubble-ai muted">Sto scrivendo...</div>}
